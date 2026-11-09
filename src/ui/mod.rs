@@ -1366,9 +1366,16 @@ impl eframe::App for App {
             // The top of the window, down to the search box's row: what's on it comes after.
             titlebar::drag_area(ui, egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), titlebar::HEIGHT)), "main");
         }
+        if !self.fullscreen {
+            // Liquid Frosted Glass bottom player bar spanning the full width of the window (all the way to the left edge)
+            egui::Panel::bottom("player").resizable(false)
+                .exact_size(self.bar_height())
+                .frame(egui::Frame::new())
+                .show_separator_line(false)
+                .show(ui, |ui| shell::player_bar(self, ui, now, true));
+        }
         if !self.fullscreen && !covered {
-            // The sidebar first, so it runs the window's full height down to the bottom:
-            // The library on the left runs continuously down past the player bar.
+            // The sidebar nav panel sits above the full-width player bar
             use crate::preset::SidebarStyle;
             let side_alpha = app_style.sidebar_alpha.clamp(0.0, 1.0);
             // The logo's row is 32 points tall.
@@ -1389,14 +1396,6 @@ impl eframe::App for App {
                 .frame(side_frame)
                 .show_separator_line(false)
                 .show(ui, |ui| shell::sidebar(self, ui));
-        }
-        if !self.fullscreen {
-            // Liquid Frosted Glass bottom player bar spanning the main content area (from sidebar to right edge)
-            egui::Panel::bottom("player").resizable(false)
-                .exact_size(self.bar_height())
-                .frame(egui::Frame::new())
-                .show_separator_line(false)
-                .show(ui, |ui| shell::player_bar(self, ui, now, true));
         }
         if !self.fullscreen && !covered {
             let q = theme::anim_bool(&ctx, "queue-drawer", self.queue_open && !self.np_open, 0.25);

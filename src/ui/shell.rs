@@ -517,7 +517,7 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
     let dice_resp = named(dice_resp, "Zufälligen Song abspielen (Spicetify)").on_hover_text("Zufälligen Song abspielen (Spicetify)").on_hover_cursor(egui::CursorIcon::PointingHand);
     let dh = theme::anim_bool(ui.ctx(), dice_resp.id.with("dh"), dice_resp.hovered(), 0.12);
     ui.painter().circle_filled(dice_r.center(), 14.0, theme::glass(0.08 + 0.12 * dh));
-    let dice_fg = theme::lerp_color(theme::text_dim(), app.accent_color(), dh);
+    let dice_fg = theme::lerp_color(theme::text_dim(), theme::text(), dh);
     glyphs::draw(ui, dice_r.center(), 18.0, glyphs::DICE, dice_fg);
     if dice_resp.clicked() {
         app.actions.push(Action::PlayRandomSong);
@@ -531,7 +531,7 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
     let home_resp = ui.interact(home_r, ui.scope_id().with("top-home"), Sense::click()).on_hover_text("Startseite").on_hover_cursor(egui::CursorIcon::PointingHand);
     let hh = theme::anim_bool(ui.ctx(), home_resp.id.with("hh"), home_resp.hovered(), 0.12);
     ui.painter().circle_filled(home_r.center(), 16.0, theme::glass(if is_home { 0.16 } else { 0.06 + 0.08 * hh }));
-    glyphs::draw(ui, home_r.center(), 18.0, glyphs::HOME, if is_home { app.accent_color() } else { theme::lerp_color(theme::text_dim(), theme::text(), hh) });
+    glyphs::draw(ui, home_r.center(), 18.0, glyphs::HOME, if is_home { Color32::WHITE } else { theme::lerp_color(theme::text_dim(), theme::text(), hh) });
     if home_resp.clicked() {
         app.actions.push(Action::Go(Page::Home));
     }
@@ -573,7 +573,7 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
     let disc_resp = ui.interact(disc_r, ui.scope_id().with("top-disc"), Sense::click()).on_hover_text("Entdecken & Neuheiten").on_hover_cursor(egui::CursorIcon::PointingHand);
     let dh = theme::anim_bool(ui.ctx(), disc_resp.id.with("dh"), disc_resp.hovered(), 0.12);
     ui.painter().circle_filled(disc_r.center(), 16.0, theme::glass(if is_new { 0.16 } else { 0.06 + 0.08 * dh }));
-    glyphs::draw(ui, disc_r.center(), 18.0, glyphs::EXPLORE, if is_new { app.accent_color() } else { theme::lerp_color(theme::text_dim(), theme::text(), dh) });
+    glyphs::draw(ui, disc_r.center(), 18.0, glyphs::EXPLORE, if is_new { Color32::WHITE } else { theme::lerp_color(theme::text_dim(), theme::text(), dh) });
     if disc_resp.clicked() {
         app.actions.push(Action::Go(Page::New));
     }
@@ -836,11 +836,10 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
     let full = ui.max_rect();
     let ctx = ui.ctx().clone();
 
-    // Mobile-inspired Frosted Liquid Glass surface across the player bar
-    let glass_surface = Color32::from_rgba_unmultiplied(16, 15, 20, 220);
+    // Mobile-inspired Frosted Liquid Glass surface across the full-width player bar
+    let glass_surface = Color32::from_rgba_unmultiplied(16, 15, 20, 140);
     ui.painter().rect_filled(full, 0.0, glass_surface);
-    ui.painter().hline(full.x_range(), full.top(), egui::Stroke::new(1.0, theme::glass(0.14)));
-    ui.painter().vline(full.left(), full.y_range(), egui::Stroke::new(1.0, theme::glass(0.08)));
+    ui.painter().hline(full.x_range(), full.top(), egui::Stroke::new(1.0, theme::glass(0.16)));
 
     let status = app.audio.status.clone();
     let hold = app.mix_hold().map(|h| (h.total, h.mix, app.mix_hold_pos(h)));
@@ -858,8 +857,8 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
     let compact = w < 650.0;
     let narrow = w < 880.0;
 
-    let left_w = if compact { 140.0 } else if narrow { 200.0 } else { 260.0 };
-    let right_w = if compact { 150.0 } else if narrow { 220.0 } else { 280.0 };
+    let left_w = if compact { 160.0 } else if narrow { 220.0 } else { 280.0 };
+    let right_w = if compact { 160.0 } else if narrow { 230.0 } else { 280.0 };
 
     let left_rect = Rect::from_min_max(pos2(full.left() + pad, full.top()), pos2(full.left() + pad + left_w, full.bottom()));
     let right_rect = Rect::from_min_max(pos2(full.right() - pad - right_w, full.top()), pos2(full.right() - pad, full.bottom()));
@@ -873,7 +872,7 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
     // =========================================================================
     // LEFT COLUMN: Album Art, Title, Artists, Heart Favorite Button
     // =========================================================================
-    let cover_size = 52.0;
+    let cover_size = 56.0;
     let cover = Rect::from_center_size(pos2(left_rect.left() + cover_size / 2.0, cy), Vec2::splat(cover_size));
     match &track {
         Some(t) => {
@@ -1075,36 +1074,37 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
     let sresp = ui.interact(seek_hit, ui.scope_id().with("bar-seek"), if held { Sense::hover() } else { Sense::click_and_drag() });
     let sresp = if total > 0.0 && !held { sresp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { sresp };
     sresp.widget_info(|| egui::WidgetInfo::slider(total > 0.0 && !held, pos as f64, "Seek"));
-    let focus = theme::anim_bool(&ctx, "bar-seek-h", total > 0.0 && !held && (sresp.hovered() || sresp.dragged()), 0.15);
-
-    // Timestamps
-    if total > 0.0 {
-        let left_str = fmt_time(pos as u32);
-        let g_left = widgets::galley(ui, &left_str, theme::regular(11.0), theme::text_dim(), 60.0);
-        ui.painter().galley(pos2(sx0 - 8.0 - g_left.size().x, sy - g_left.size().y / 2.0), g_left, theme::text_dim());
-
-        let right_str = fmt_time(total as u32);
-        let g_right = widgets::galley(ui, &right_str, theme::regular(11.0), theme::text_dim(), 60.0);
-        ui.painter().galley(pos2(sx1 + 8.0, sy - g_right.size().y / 2.0), g_right, theme::text_dim());
-    }
-
-    let thick = 3.5 + 2.5 * focus;
+    let focus = theme::anim_bool(&ctx, "bar-seek-h", total > 0.0 && !held && (sresp.hovered() || sresp.dragged()), 0.18);
+    let thick = 4.0 + 4.0 * focus;
     let line_r = Rect::from_min_max(pos2(sx0, sy - thick / 2.0), pos2(sx1, sy + thick / 2.0));
-    ui.painter().rect_filled(line_r, thick / 2.0, theme::glass(0.20));
+    ui.painter().rect_filled(line_r, thick / 2.0, Color32::from_white_alpha(38));
 
-    // Automix handoff window
+    // Automix: the handoff window tints to the song's colour with its start ticked, so
+    // the blend has a place it visibly begins at.
     if mix > 0.5 {
         let edge = sx0 + (sx1 - sx0) * ((total - mix) / total);
         let band = Rect::from_min_max(pos2(edge, line_r.top()), line_r.max);
-        ui.painter().rect_filled(band, thick / 2.0, theme::with_alpha(accent, 0.30));
+        ui.painter().rect_filled(band, thick / 2.0, theme::with_alpha(accent, 0.32));
+        let tick = Rect::from_min_size(pos2(edge - 1.0, line_r.top()), vec2(2.0, thick));
+        ui.painter().rect_filled(tick, 1.0, theme::with_alpha(accent, 0.9));
     }
     let frac = if total > 0.0 { (pos / total).clamp(0.0, 1.0) } else { 0.0 };
     if frac > 0.0 {
-        let played_r = Rect::from_min_size(line_r.min, vec2(line_r.width() * frac, thick));
-        ui.painter().rect_filled(played_r, thick / 2.0, accent);
-        // Scrubber thumb / knob
-        let knob_r = 3.5 + 2.5 * focus;
-        ui.painter().circle_filled(pos2(played_r.right(), sy), knob_r, theme::text());
+        let fill = theme::lerp_color(Color32::from_white_alpha(163), Color32::from_white_alpha(240), focus);
+        ui.painter().rect_filled(Rect::from_min_size(line_r.min, vec2(line_r.width() * frac, thick)), thick / 2.0, fill);
+    }
+
+    // Timestamps matching fullscreen view (elapsed on left, remaining -X:XX on right)
+    if total > 0.0 {
+        let tc = theme::with_alpha(Color32::WHITE, 0.62);
+        let left_str = fmt_time(pos as u32);
+        let g_left = widgets::galley(ui, &left_str, theme::semibold(11.0), tc, 60.0);
+        ui.painter().galley(pos2(sx0 - 10.0 - g_left.size().x, sy - g_left.size().y / 2.0), g_left, tc);
+
+        let rem = fmt_time((total - pos).max(0.0) as u32);
+        let right_str = format!("-{rem}");
+        let g_right = widgets::galley(ui, &right_str, theme::semibold(11.0), tc, 60.0);
+        ui.painter().galley(pos2(sx1 + 10.0, sy - g_right.size().y / 2.0), g_right, tc);
     }
 
     let at = |p: Pos2| (((p.x - sx0) / (sx1 - sx0)).clamp(0.0, 1.0) * total).max(0.0);
