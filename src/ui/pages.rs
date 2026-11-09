@@ -1149,6 +1149,16 @@ fn spotify_sync_tab(app: &mut App, ui: &mut Ui, _now: f64) {
                         }
                     }
                 }
+                if pill(ui, "Aktualisieren", Some(icon::ROTATE_CW), false).clicked() {
+                    let xfer = app.transfer.clone();
+                    let b = app.backend.clone();
+                    let slot = app.spotify_loaded_playlist.clone();
+                    let src = entry.source.clone();
+                    app.spotify_selected = Some((entry.clone(), None, true));
+                    xfer.fetch_spotify_playlist(&b, src.clone(), move |res| {
+                        *slot.lock().unwrap() = Some((src, res));
+                    });
+                }
                 if pill(ui, "In YouTube Music importieren", Some(icon::DOWNLOAD), false).clicked() {
                     app.xfer.picked = Some(entry.source.clone());
                     app.actions.push(Action::Go(Page::Transfer));
@@ -1291,7 +1301,14 @@ fn spotify_sync_tab(app: &mut App, ui: &mut Ui, _now: f64) {
             }
 
             // Playlists Grid Section
-            ui.label(RichText::new("Deine Spotify Playlists").font(theme::bold(17.0)).color(theme::text()));
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Deine Spotify Playlists").font(theme::bold(17.0)).color(theme::text()));
+                ui.add_space(8.0);
+                if pill(ui, "Aktualisieren", Some(icon::ROTATE_CW), false).clicked() {
+                    *app.transfer.account.lock().unwrap() = crate::transfer::Account::Unknown;
+                    app.transfer.ensure_account(&app.backend);
+                }
+            });
             ui.add_space(8.0);
 
             let playlists: Vec<&Entry> = library.iter().filter(|e| e.source != Source::Liked).collect();
