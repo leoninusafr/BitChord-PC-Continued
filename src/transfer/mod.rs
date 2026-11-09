@@ -394,6 +394,30 @@ impl Transfer {
         });
     }
 
+    /// Read tracks of a Spotify playlist or liked songs for direct browsing and Spottube playback.
+    pub fn fetch_spotify_playlist(
+        self: &Arc<Self>,
+        rt: &crate::backend::Backend,
+        source: Source,
+        on_done: impl FnOnce(Result<spotify::Playlist, String>) + Send + 'static,
+    ) {
+        let this = self.clone();
+        rt.spawn(async move {
+            let res = async {
+                let cookie = this.cookie();
+                let client = spotify::Client::connect(cookie.as_deref(), &this.data_dir).await?;
+                match &source {
+                    Source::Playlist(id) => client.playlist(id, |_, _| {}).await,
+                    Source::Liked => client.liked(|_, _| {}).await,
+                }
+            }
+            .await
+            .map_err(|e| e.to_string());
+            on_done(res);
+            this.wake();
+        });
+    }
+
     pub fn set_paused(&self, paused: bool) {
         if let Some(j) = self.job.lock().unwrap().as_mut() {
             j.paused = paused;
@@ -1037,8 +1061,12 @@ fn plain_title(s: &str) -> &str {
 /// Searched signed out first: YouTube refuses far fewer of those (about 1 in 20 against
 /// a quarter or more of an account's when it's busy), and a refusal costs only that
 /// search. Signed-out results miss some major-label releases, so a song still not
-/// found surely gets one signed-in search before settling.
-async fn search_song(api: &Api, t: &Track) -> Result<Option<(YtTrack, bool)>> {
+/// Matches a Spotify track to a YouTube Music track.
+pub async fn match_spotify_track(api: &Api, t: &Track) -> Option<YtTrack> {
+    search_song(api, t).await.ok().flatten().map(|(yt_track, _)| yt_track)
+}
+
+pub async fn search_song(api: &Api, t: &Track) -> Result<Option<(YtTrack, bool)>> {
     let mut hits: Vec<YtTrack> = Vec::new();
     let add = |hits: &mut Vec<YtTrack>, found: Vec<YtTrack>| {
         let new: Vec<YtTrack> = found.into_iter().take(5).filter(|h| !hits.iter().any(|x| x.id == h.id)).collect();

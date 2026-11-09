@@ -6,6 +6,8 @@
 mod account;
 mod actions;
 mod collections;
+pub mod details;
+pub mod devices_dialog;
 mod dev;
 mod dialogs;
 mod glyphs;
@@ -28,7 +30,7 @@ mod transfer;
 mod widgets;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
@@ -74,6 +76,7 @@ pub enum Page {
 pub enum LibTab {
     Playlists,
     Songs,
+    Spotify,
     Albums,
     History,
     Uploads,
@@ -129,6 +132,18 @@ pub enum Action {
     UpgradeQuality,
     /// A song chosen on the search page as the Spotify transfer's match.
     TransferPick(Track),
+    /// Toggle shuffle mode (on/off).
+    ShuffleToggle,
+    /// Play a completely random song from library/trending.
+    PlayRandomSong,
+    /// Toggle Spotify-style Now Playing Details panel on right.
+    ToggleDetails,
+    /// Toggle Spotify Connect / Remote Control device modal.
+    ToggleDevices,
+    /// Play a single Spotify track matched to YouTube Music.
+    PlaySpotify(crate::transfer::spotify::Track),
+    /// Play a Spotify playlist starting at an index, matching tracks on the fly.
+    PlaySpotifyPlaylist(Vec<crate::transfer::spotify::Track>, usize),
 }
 
 enum Dialog {
@@ -455,6 +470,9 @@ pub struct App {
     np_open: bool,
     np_tab: NpTab,
     queue_open: bool,
+    pub details_open: bool,
+    pub devices_open: bool,
+    pub remote_server: Option<crate::remote::RemoteServer>,
     fullscreen: bool,
     /// The mini player: the window shrunk to a strip.
     mini: mini::Mini,
@@ -530,6 +548,10 @@ pub struct App {
     /// The collection page whose inline search is open, and what's typed in it.
     coll_search: Option<(String, String)>,
     actions: Vec<Action>,
+    pub spotify_selected: Option<(crate::transfer::spotify::Entry, Option<crate::transfer::spotify::Playlist>, bool)>,
+    pub spotify_loaded_playlist: Arc<std::sync::Mutex<Option<(crate::transfer::spotify::Source, Result<crate::transfer::spotify::Playlist, String>)>>>,
+    pub spotify_cache: Arc<std::sync::Mutex<std::collections::HashMap<String, Track>>>,
+    pub bg_actions: Arc<std::sync::Mutex<Vec<Action>>>,
     dialog: Option<Dialog>,
     share_pending: Option<String>,
     smoke: Option<String>,
@@ -747,6 +769,9 @@ impl App {
             np_open: false,
             np_tab: if get("np_art").is_some_and(|v| v == "1") { NpTab::Art } else { NpTab::Lyrics },
             queue_open: false,
+            details_open: false,
+            devices_open: false,
+            remote_server: Some(crate::remote::RemoteServer::new()),
             fullscreen: false,
             mini: mini::Mini::load(get),
             lyrics: None,
@@ -765,6 +790,10 @@ impl App {
             jam: Default::default(),
             toast: None,
             actions: Vec::new(),
+            spotify_selected: None,
+            spotify_loaded_playlist: Arc::new(Mutex::new(None)),
+            spotify_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            bg_actions: Arc::new(Mutex::new(Vec::new())),
             dialog: None,
             share_pending: None,
             smoke: None,
@@ -918,6 +947,7 @@ impl App {
                 }
                 None
             }
+            Page::Library(LibTab::Spotify) => None,
             Page::Library(_) if self.logged_in => Some(Req::Library),
             _ => None,
         };
@@ -930,6 +960,7 @@ impl App {
             Page::Library(LibTab::History) => self.history.is_some(),
             Page::Library(LibTab::Uploads) => self.uploads.is_some(),
             Page::Library(LibTab::Songs) => self.opened(LIKED_MUSIC).is_some(),
+            Page::Library(LibTab::Spotify) => true,
             Page::Library(_) => self.library.is_some(),
             _ => false,
         };
@@ -1077,17 +1108,80 @@ impl App {
         }
     }
 
-    /// Height of the bottom player area: the capsule's 56 points plus the margin it
-    /// floats on.
+    /// Height of the full-width bottom player bar.
     fn bar_height(&self) -> f32 {
-        86.0
+        82.0
     }
 
     fn toast(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), -1.0));
     }
 
+    pub fn sync_remote(&mut self) {
+        let cmds = self.remote_server.as_ref().map(|s| s.poll_commands()).unwrap_or_default();
+        for cmd in cmds {
+            match cmd {
+                crate::remote::RemoteCommand::Play => {
+                    if !self.playing() { self.toggle(); }
+                }
+                crate::remote::RemoteCommand::Pause => {
+                    if self.playing() { self.toggle(); }
+                }
+                crate::remote::RemoteCommand::Toggle => {
+                    self.toggle();
+                }
+                crate::remote::RemoteCommand::Next => {
+                    self.next();
+                }
+                crate::remote::RemoteCommand::Prev => {
+                    self.prev();
+                }
+                crate::remote::RemoteCommand::Seek(pos) => {
+                    self.actions.push(Action::Seek(pos));
+                }
+                crate::remote::RemoteCommand::Volume(vol) => {
+                    self.audio.set_volume(vol.clamp(0.0, 1.0));
+                }
+                crate::remote::RemoteCommand::Shuffle => {
+                    self.toggle_shuffle();
+                }
+                crate::remote::RemoteCommand::Repeat => {
+                    self.queue.repeat = match self.queue.repeat {
+                        Repeat::Off => Repeat::All,
+                        Repeat::All => Repeat::One,
+                        Repeat::One => Repeat::Off,
+                    };
+                }
+            }
+        }
 
+        if let Some(srv) = self.remote_server.as_ref() {
+            let track = self.playing_track().cloned().or_else(|| self.current().cloned());
+            let status = &self.audio.status;
+            let total = status.duration().map(|d| d.as_secs_f32())
+                .or(track.as_ref().and_then(|t| t.duration).map(|d| d as f32))
+                .unwrap_or(0.0);
+            let pos = status.position_smooth().as_secs_f32();
+            let repeat_str = match self.queue.repeat {
+                Repeat::Off => "off",
+                Repeat::All => "all",
+                Repeat::One => "one",
+            };
+            let remote_state = crate::remote::RemoteState {
+                title: track.as_ref().map(|t| t.title.clone()).unwrap_or_else(|| "Kein Titel".to_string()),
+                artist: track.as_ref().map(|t| t.artist_line()).unwrap_or_else(|| "BitChord".to_string()),
+                album: track.as_ref().and_then(|t| t.album.as_ref().map(|a| a.name.clone())),
+                cover_url: track.as_ref().and_then(|t| t.thumbs.first().map(|th| th.url.clone())),
+                duration_secs: total,
+                position_secs: pos,
+                is_playing: self.playing(),
+                volume: self.audio.volume(),
+                shuffle: self.shuffle_mode(),
+                repeat: repeat_str.to_string(),
+            };
+            srv.update_state(remote_state);
+        }
+    }
 }
 
 
@@ -1095,6 +1189,7 @@ impl App {
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         dev_pace();
+        self.sync_remote();
         self.lyric_view.release_hidden(ctx.cumulative_pass_nr());
         let now = ctx.input(|i| i.time);
         self.sync_look();
@@ -1120,6 +1215,11 @@ impl eframe::App for App {
             self.show_window(ctx);
             jam::open_link(self, code);
         }
+        let mut bg = self.bg_actions.lock().unwrap();
+        if !bg.is_empty() {
+            self.actions.append(&mut bg);
+        }
+        drop(bg);
         for a in std::mem::take(&mut self.actions) {
             self.apply(a);
         }
@@ -1253,8 +1353,8 @@ impl eframe::App for App {
             // The top of the window, down to the search box's row: what's on it comes after.
             titlebar::drag_area(ui, egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), titlebar::HEIGHT)), "main");
         }
-        if !self.fullscreen && covered {
-            // Now playing hides the pages: the player bar keeps its full-width place.
+        if !self.fullscreen {
+            // Full-width modern bottom player bar across the entire window (Spotify / Apple Music style)
             egui::Panel::bottom("player").resizable(false)
                 .exact_size(self.bar_height())
                 .frame(egui::Frame::new())
@@ -1277,14 +1377,11 @@ impl eframe::App for App {
                     .outer_margin(egui::Margin { left: 10, right: 4, top: 10, bottom: 10 })
                     .inner_margin(egui::Margin::symmetric(12, 14)),
             };
-            // The sidebar first, so it runs the window's full height: the player floats
-            // over the main section only, and the page content scrolls under it.
             egui::Panel::left("nav").resizable(false)
                 .exact_size(shell::SIDEBAR_W - (shell::SIDEBAR_W - shell::RAIL_W) * shell::sidebar_collapse(self, &ctx))
                 .frame(side_frame)
                 .show_separator_line(false)
                 .show(ui, |ui| shell::sidebar(self, ui));
-            let section = ui.available_rect_before_wrap();
             let q = theme::anim_bool(&ctx, "queue-drawer", self.queue_open && !self.np_open, 0.25);
             if q > 0.01 {
                 egui::Panel::right("queue").resizable(false)
@@ -1293,24 +1390,20 @@ impl eframe::App for App {
                     .show_separator_line(false)
                     .show(ui, |ui| shell::queue_drawer(self, ui));
             }
-            let main_right = ui.available_rect_before_wrap().right();
+            let d = theme::anim_bool(&ctx, "np-details-drawer", self.details_open && !self.np_open, 0.25);
+            if d > 0.01 {
+                egui::Panel::right("np-details").resizable(false)
+                    .exact_size(330.0 * d)
+                    .frame(egui::Frame::new().fill(theme::panel(0.42)).inner_margin(egui::Margin::symmetric(14, 16)))
+                    .show_separator_line(false)
+                    .show(ui, |ui| details::details_panel(self, ui));
+            }
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().inner_margin(egui::Margin { left: 28, right: 28, top: titlebar::top_margin(14, 42.0), bottom: 0 }))
+                .frame(egui::Frame::new().inner_margin(egui::Margin { left: 28, right: 28, top: titlebar::top_margin(14, 42.0), bottom: 12 }))
                 .show(ui, |ui| {
                     shell::top_bar(self, ui);
                     ui.add_space(2.0);
                     pages::page(self, ui, now);
-                });
-            // The player: a frosted strip over the bottom of the main section, above the
-            // pages, so their last rows fade under it instead of stopping at a seam.
-            let strip = egui::Rect::from_min_max(egui::pos2(section.left(), screen.bottom() - self.bar_height()), egui::pos2(main_right, screen.bottom()));
-            egui::Area::new(egui::Id::new("player-bar"))
-                .fixed_pos(strip.min)
-                .order(egui::Order::Middle)
-                .show(&ctx, |ui| {
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
-                        shell::player_bar(self, ui, now, true);
-                    });
                 });
         }
         if np > 0.001 {
@@ -1319,6 +1412,7 @@ impl eframe::App for App {
             theme::set_mode(&ctx, pages);
         }
         self.draw_dialog(&ctx);
+        devices_dialog::devices_dialog(self, &ctx);
         notes::card(self, &ctx);
         notes::dialog(self, &ctx);
         if let Some(url) = self.share_pending.take() { ctx.copy_text(url); }

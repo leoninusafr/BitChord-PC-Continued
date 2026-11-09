@@ -6,7 +6,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use egui::{Align2, RichText, Sense, Ui, pos2, vec2};
+use egui::{Align2, Color32, Rect, RichText, Sense, Ui, pos2, vec2};
 
 use super::pages::{divider, page_title, section_label, setting_row, settings_card, toggle};
 use super::widgets::{icon_at, pill};
@@ -688,9 +688,10 @@ fn room(app: &mut App, ui: &mut Ui) {
             });
         }
         ui.add_space(10.0);
+        let jam_link = crate::jam::share_link(&code);
         ui.horizontal(|ui| {
             if pill(ui, "Copy link", Some(icon::LINK), true).clicked() {
-                app.share_pending = Some(crate::jam::share_link(&code));
+                app.share_pending = Some(jam_link.clone());
                 app.toast("Link copied");
             }
             ui.add_space(8.0);
@@ -699,6 +700,52 @@ fn room(app: &mut App, ui: &mut Ui) {
                 app.toast("Code copied");
             }
         });
+
+        // Authentic PNG QR Code (strictly NO text/ASCII QR)
+        if host && !code.is_empty() {
+            ui.add_space(12.0);
+            let qr_id = ui.id().with(("jam-qr-toggle", &code));
+            let mut show_qr = ui.data(|d| d.get_temp::<bool>(qr_id).unwrap_or(false));
+            if pill(ui, if show_qr { "QR-Code ausblenden" } else { "QR-Code anzeigen" }, Some(icon::MAXIMIZE_2), false).clicked() {
+                show_qr = !show_qr;
+                ui.data_mut(|d| d.insert_temp(qr_id, show_qr));
+            }
+            if show_qr {
+                ui.add_space(10.0);
+                if let Some(png) = crate::remote::generate_qr_png_bytes(&jam_link) {
+                    let key = egui::Id::unique(("jam-qr-tex", &code));
+                    let tex = ui.ctx().data_mut(|d| {
+                        d.get_temp::<egui::TextureHandle>(key).unwrap_or_else(|| {
+                            let img = image::load_from_memory(png.as_slice()).unwrap().into_rgba8();
+                            let ci = egui::ColorImage::from_rgba_unmultiplied(
+                                [img.width() as usize, img.height() as usize],
+                                img.as_raw(),
+                            );
+                            let t = ui.ctx().load_texture("jam-qr", ci, egui::TextureOptions::LINEAR);
+                            d.insert_temp(key, t.clone());
+                            t
+                        })
+                    });
+                    ui.horizontal(|ui| {
+                        let (img_rect, _) = ui.allocate_exact_size(vec2(130.0, 130.0), Sense::hover());
+                        ui.painter().rect_filled(img_rect, 8.0, Color32::WHITE);
+                        ui.painter().image(tex.id(), img_rect.shrink(6.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                        ui.add_space(12.0);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("Mit Smartphone beitreten").font(theme::bold(13.0)).color(theme::text()));
+                            ui.add_space(4.0);
+                            dim(ui, "Scanne den QR-Code mit der Kamera, um direkt der gemeinsamen Jam-Session beizutreten.");
+                            ui.add_space(6.0);
+                            let link_resp = ui.link(RichText::new(&jam_link).font(egui::FontId::monospace(11.5)).color(app.accent_color()));
+                            if link_resp.clicked() {
+                                ui.ctx().copy_text(jam_link.clone());
+                                app.toast("Link kopiert");
+                            }
+                        });
+                    });
+                }
+            }
+        }
         ui.add_space(16.0);
     });
 

@@ -6,10 +6,11 @@ use std::sync::atomic::Ordering;
 use egui::{Align2, Color32, Rect, RichText, Sense, Ui, Vec2, pos2, vec2};
 
 use super::widgets::{self, RowOpts, card, chip, h_scroll, named, paint_cover, pill, shelf_header, track_row};
-use super::{Action, App, LibTab, Page, Selection};
+use super::{Action, App, LibTab, Page, Selection, glyphs};
 use crate::backend::compact;
 use crate::model::{Card, ShelfKind, Target, Track};
 use crate::theme::{self, icon};
+use crate::transfer::{Account, spotify::{Entry, Source}};
 
 const CARD: f32 = 180.0;
 
@@ -950,7 +951,7 @@ fn artist(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
 
 fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
     page_title(ui, "Library");
-    if !app.logged_in {
+    if !app.logged_in && tab != LibTab::Spotify {
         ui.add_space(10.0);
         ui.label(RichText::new("Sign in to see your playlists, liked songs and history.").color(theme::text_dim()));
         ui.add_space(12.0);
@@ -962,7 +963,14 @@ fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
-        for (t, label) in [(LibTab::Playlists, "Playlists"), (LibTab::Songs, "Liked songs"), (LibTab::Albums, "Albums"), (LibTab::History, "History"), (LibTab::Uploads, "Uploads")] {
+        for (t, label) in [
+            (LibTab::Playlists, "Playlists"),
+            (LibTab::Songs, "Liked songs"),
+            (LibTab::Spotify, "Spotify Sync"),
+            (LibTab::Albums, "Albums"),
+            (LibTab::History, "History"),
+            (LibTab::Uploads, "Uploads"),
+        ] {
             if chip(ui, label, tab == t).clicked() {
                 // Tabs swap in place (no history entry); the current one refreshes.
                 if tab == t {
@@ -1047,6 +1055,7 @@ fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
                 widgets::skeleton_rows(ui, now, 3);
             }
         }
+        LibTab::Spotify => spotify_sync_tab(app, ui, now),
         _ => {
             if app.library.is_none() {
                 placeholder(app, ui, now, 2, CARD);
@@ -1062,8 +1071,297 @@ fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
                     grid(ui, &lib.playlists, &mut app.actions)
                 }
                 LibTab::Albums => grid(ui, &lib.albums, &mut app.actions),
-                LibTab::Songs | LibTab::History | LibTab::Uploads => unreachable!(),
+                LibTab::Songs | LibTab::Spotify | LibTab::History | LibTab::Uploads => unreachable!(),
             }
+        }
+    }
+}
+
+fn spotify_sync_tab(app: &mut App, ui: &mut Ui, _now: f64) {
+    let loaded = app.spotify_loaded_playlist.lock().unwrap().take();
+    if let Some((src, res)) = loaded {
+        if let Some((entry, playlist, loading)) = &mut app.spotify_selected {
+            if entry.source == src {
+                *loading = false;
+                match res {
+                    Ok(p) => *playlist = Some(p),
+                    Err(e) => {
+                        app.toast(format!("Fehler beim Laden von Spotify: {e}"));
+                    }
+                }
+            }
+        }
+    }
+
+    app.transfer.ensure_account(&app.backend);
+    let account = app.transfer.account.lock().unwrap().clone();
+
+    if let Some((entry, playlist, loading)) = app.spotify_selected.clone() {
+        // Back Button
+        if pill(ui, "Zurück zur Übersicht", Some(icon::CHEVRON_LEFT), false).clicked() {
+            app.spotify_selected = None;
+            return;
+        }
+        ui.add_space(14.0);
+
+        // Header Section
+        let (header_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 130.0), Sense::hover());
+        ui.painter().rect_filled(header_rect, 12.0, theme::panel(0.35));
+        ui.painter().rect_stroke(header_rect, 12.0, egui::Stroke::new(1.0, theme::glass(0.12)), egui::StrokeKind::Inside);
+
+        let h_inner = header_rect.shrink(14.0);
+        let art_size = 102.0;
+        let art_rect = Rect::from_min_size(h_inner.min, vec2(art_size, art_size));
+        paint_cover(ui, art_rect, &super::transfer::spotify_thumbs(&entry.art), 10.0, 1.0);
+
+        let info_rect = Rect::from_min_max(pos2(art_rect.right() + 16.0, h_inner.top()), h_inner.max);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(info_rect), |ui| {
+            ui.horizontal(|ui| {
+                let badge_rect = Rect::from_min_size(ui.cursor().min, vec2(16.0, 16.0));
+                super::transfer::badge(ui, badge_rect);
+                ui.add_space(20.0);
+                ui.label(RichText::new("SPOTIFY SYNC · SPOTTUBE MODUS").font(theme::semibold(11.0)).color(super::transfer::SPOTIFY));
+            });
+            ui.add_space(2.0);
+            ui.label(RichText::new(&entry.name).font(theme::bold(20.0)).color(theme::text()));
+            let count_str = match playlist.as_ref() {
+                Some(p) => format!("{} Titel", p.tracks.len()),
+                None => entry.count.map_or("Wird geladen...".to_string(), |c| format!("{c} Titel")),
+            };
+            let subtitle = if entry.owner.is_empty() {
+                format!("Spotify · {count_str} · Werbefreies Audio über YouTube Music")
+            } else {
+                format!("{} · {count_str} · Werbefreies Audio über YouTube Music", entry.owner)
+            };
+            ui.label(RichText::new(subtitle).font(theme::regular(12.5)).color(theme::text_dim()));
+            ui.add_space(8.0);
+
+            ui.horizontal(|ui| {
+                if let Some(p) = &playlist {
+                    if !p.tracks.is_empty() {
+                        if pill(ui, "Alle abspielen", Some(icon::PLAY), true).clicked() {
+                            app.actions.push(Action::PlaySpotifyPlaylist(p.tracks.clone(), 0));
+                        }
+                        if pill(ui, "Mischen", Some(icon::SHUFFLE), false).clicked() {
+                            let mut t = p.tracks.clone();
+                            super::shuffle(&mut t);
+                            app.actions.push(Action::PlaySpotifyPlaylist(t, 0));
+                        }
+                    }
+                }
+                if pill(ui, "In YouTube Music importieren", Some(icon::DOWNLOAD), false).clicked() {
+                    app.xfer.picked = Some(entry.source.clone());
+                    app.actions.push(Action::Go(Page::Transfer));
+                }
+            });
+        });
+
+        ui.add_space(18.0);
+
+        if loading {
+            ui.add_space(30.0);
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new("Lade Songs von Spotify...").font(theme::regular(14.0)).color(theme::text_dim()));
+            });
+            return;
+        }
+
+        let Some(p) = playlist else {
+            ui.label(RichText::new("Konnte die Playlist-Titel nicht laden.").color(theme::text_dim()));
+            return;
+        };
+
+        if p.tracks.is_empty() {
+            ui.label(RichText::new("Diese Playlist enthält keine Songs.").color(theme::text_dim()));
+            return;
+        }
+
+        // Table Header
+        let col_h = 24.0;
+        let (thead, _) = ui.allocate_exact_size(vec2(ui.available_width(), col_h), Sense::hover());
+        ui.painter().text(pos2(thead.left() + 16.0, thead.center().y), egui::Align2::LEFT_CENTER, "#", theme::semibold(12.0), theme::text_faint());
+        ui.painter().text(pos2(thead.left() + 50.0, thead.center().y), egui::Align2::LEFT_CENTER, "TITEL", theme::semibold(12.0), theme::text_faint());
+        ui.painter().text(pos2(thead.right() - 20.0, thead.center().y), egui::Align2::RIGHT_CENTER, "DAUER", theme::semibold(12.0), theme::text_faint());
+        ui.add_space(4.0);
+
+        // Track rows
+        let tracks_clone = p.tracks.clone();
+        for (i, t) in p.tracks.iter().enumerate() {
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.12);
+            if h > 0.0 {
+                ui.painter().rect_filled(r, 8.0, theme::glass(0.06 * h));
+            }
+
+            // Index / Play Icon
+            let cy = r.center().y;
+            if resp.hovered() {
+                widgets::icon_at(ui, pos2(r.left() + 22.0, cy), icon::PLAY, 14.0, super::transfer::SPOTIFY);
+            } else {
+                ui.painter().text(pos2(r.left() + 22.0, cy), egui::Align2::CENTER_CENTER, &(i + 1).to_string(), theme::regular(13.0), theme::text_dim());
+            }
+
+            // Title & Artist
+            let text_x = r.left() + 50.0;
+            let artist_str = t.artist_line();
+            ui.painter().text(pos2(text_x, cy - 8.0), egui::Align2::LEFT_CENTER, &t.name, theme::semibold(14.0), if resp.hovered() { super::transfer::SPOTIFY } else { theme::text() });
+            ui.painter().text(pos2(text_x, cy + 9.0), egui::Align2::LEFT_CENTER, &artist_str, theme::regular(12.0), theme::text_dim());
+
+            // Duration
+            if let Some(dur) = t.duration {
+                let dur_str = format!("{}:{:02}", dur / 60, dur % 60);
+                ui.painter().text(pos2(r.right() - 20.0, cy), egui::Align2::RIGHT_CENTER, &dur_str, theme::regular(12.5), theme::text_dim());
+            }
+
+            if resp.clicked() {
+                app.actions.push(Action::PlaySpotifyPlaylist(tracks_clone.clone(), i));
+            }
+        }
+        return;
+    }
+
+    // Dashboard Overview
+    match &account {
+        Account::SignedIn { name, library } => {
+            let (c_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 70.0), Sense::hover());
+            ui.painter().rect_filled(c_rect, 12.0, theme::panel(0.35));
+            ui.painter().rect_stroke(c_rect, 12.0, egui::Stroke::new(1.0, theme::glass(0.1)), egui::StrokeKind::Inside);
+            let inner = c_rect.shrink(14.0);
+            let cy = inner.center().y;
+
+            let badge_r = Rect::from_center_size(pos2(inner.left() + 20.0, cy), Vec2::splat(32.0));
+            super::transfer::badge(ui, badge_r);
+
+            let text_x = badge_r.right() + 14.0;
+            let who = if name.is_empty() { "Spotify verbunden".to_string() } else { format!("Angemeldet als {}", name) };
+            ui.painter().text(pos2(text_x, cy - 8.0), egui::Align2::LEFT_CENTER, &who, theme::bold(15.0), theme::text());
+            ui.painter().text(pos2(text_x, cy + 8.0), egui::Align2::LEFT_CENTER, "Spottube-Modus aktiv · Werbefreies Audio über YouTube Music", theme::regular(12.0), theme::text_dim());
+
+            // Right action buttons: Aktualisieren, Abmelden
+            let btn_area = Rect::from_min_max(pos2(inner.right() - 260.0, inner.top()), inner.max);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(btn_area), |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if pill(ui, "Abmelden", None, false).clicked() {
+                        app.transfer.set_cookie(None, &app.backend);
+                    }
+                    ui.add_space(8.0);
+                    if pill(ui, "Aktualisieren", Some(icon::HISTORY), false).clicked() {
+                        app.transfer.load_account(&app.backend);
+                    }
+                });
+            });
+
+            ui.add_space(16.0);
+
+            // Liked songs Hero card if available
+            if let Some(liked_entry) = library.iter().find(|e| e.source == Source::Liked) {
+                let (h_rect, h_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 90.0), Sense::click());
+                let h_resp = h_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                let h_hover = theme::anim_bool(ui.ctx(), h_resp.id.with("hh"), h_resp.hovered(), 0.15);
+                ui.painter().rect_filled(h_rect, 14.0, theme::lerp_color(Color32::from_rgb(20, 48, 30), Color32::from_rgb(26, 64, 40), h_hover));
+                ui.painter().rect_stroke(h_rect, 14.0, egui::Stroke::new(1.0, theme::lerp_color(theme::glass(0.15), super::transfer::SPOTIFY, h_hover * 0.5)), egui::StrokeKind::Inside);
+
+                let hi = h_rect.shrink(16.0);
+                let heart_r = Rect::from_center_size(pos2(hi.left() + 25.0, hi.center().y), Vec2::splat(36.0));
+                ui.painter().rect_filled(heart_r, 8.0, super::transfer::SPOTIFY);
+                glyphs::draw(ui, heart_r.center(), 22.0, glyphs::HEART_FILLED, Color32::WHITE);
+
+                let tx = heart_r.right() + 16.0;
+                ui.painter().text(pos2(tx, hi.center().y - 9.0), egui::Align2::LEFT_CENTER, "Spotify Lieblingssongs", theme::bold(17.0), Color32::WHITE);
+                let count_text = liked_entry.count.map_or("Deine gelikten Songs".to_string(), |c| format!("{c} synchronisierte Songs"));
+                ui.painter().text(pos2(tx, hi.center().y + 9.0), egui::Align2::LEFT_CENTER, &count_text, theme::regular(13.0), Color32::from_rgb(200, 225, 205));
+
+                let btns_r = Rect::from_min_max(pos2(hi.right() - 250.0, hi.top()), hi.max);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(btns_r), |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if pill(ui, "Öffnen", Some(icon::CHEVRON_RIGHT), false).clicked() || h_resp.clicked() {
+                            app.spotify_selected = Some((liked_entry.clone(), None, true));
+                            let xfer = app.transfer.clone();
+                            let b = app.backend.clone();
+                            let slot = app.spotify_loaded_playlist.clone();
+                            xfer.fetch_spotify_playlist(&b, Source::Liked, move |res| {
+                                *slot.lock().unwrap() = Some((Source::Liked, res));
+                            });
+                        }
+                    });
+                });
+                ui.add_space(18.0);
+            }
+
+            // Playlists Grid Section
+            ui.label(RichText::new("Deine Spotify Playlists").font(theme::bold(17.0)).color(theme::text()));
+            ui.add_space(8.0);
+
+            let playlists: Vec<&Entry> = library.iter().filter(|e| e.source != Source::Liked).collect();
+            if playlists.is_empty() {
+                ui.label(RichText::new("Keine Playlists gefunden.").color(theme::text_dim()));
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(16.0, 18.0);
+                    let card_w = 170.0;
+                    let card_h = 220.0;
+                    for pl in playlists {
+                        let (cr, cresp) = ui.allocate_exact_size(vec2(card_w, card_h), Sense::click());
+                        let cresp = cresp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                        let ch = theme::anim_bool(ui.ctx(), cresp.id.with("ch"), cresp.hovered(), 0.12);
+                        ui.painter().rect_filled(cr, 10.0, theme::glass(0.04 + 0.05 * ch));
+                        ui.painter().rect_stroke(cr, 10.0, egui::Stroke::new(1.0, theme::glass(0.08 + 0.08 * ch)), egui::StrokeKind::Inside);
+
+                        let c_inner = cr.shrink(10.0);
+                        let art_size = c_inner.width();
+                        let art_r = Rect::from_min_size(c_inner.min, vec2(art_size, art_size));
+                        paint_cover(ui, art_r, &super::transfer::spotify_thumbs(&pl.art), 8.0, 1.0);
+
+                        // Overlay play button on hover
+                        if ch > 0.0 {
+                            let play_circle = Rect::from_center_size(pos2(art_r.right() - 20.0, art_r.bottom() - 20.0), Vec2::splat(32.0));
+                            ui.painter().circle_filled(play_circle.center(), 16.0, super::transfer::SPOTIFY);
+                            widgets::icon_at(ui, play_circle.center(), icon::PLAY, 14.0, Color32::from_rgb(11, 11, 11));
+                        }
+
+                        // Title & Subtitle
+                        let t_y = art_r.bottom() + 10.0;
+                        ui.painter().text(pos2(c_inner.left(), t_y), egui::Align2::LEFT_TOP, &pl.name, theme::semibold(13.5), theme::text());
+                        let sub = pl.count.map_or_else(|| pl.owner.clone(), |c| format!("{c} Songs"));
+                        ui.painter().text(pos2(c_inner.left(), t_y + 18.0), egui::Align2::LEFT_TOP, &sub, theme::regular(11.5), theme::text_dim());
+
+                        if cresp.clicked() {
+                            app.spotify_selected = Some((pl.clone(), None, true));
+                            let xfer = app.transfer.clone();
+                            let b = app.backend.clone();
+                            let slot = app.spotify_loaded_playlist.clone();
+                            let src = pl.source.clone();
+                            xfer.fetch_spotify_playlist(&b, src.clone(), move |res| {
+                                *slot.lock().unwrap() = Some((src, res));
+                            });
+                        }
+                    }
+                });
+            }
+        }
+        _ => {
+            // Signed out onboarding card
+            let (c_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 160.0), Sense::hover());
+            ui.painter().rect_filled(c_rect, 14.0, theme::panel(0.4));
+            ui.painter().rect_stroke(c_rect, 14.0, egui::Stroke::new(1.0, theme::glass(0.12)), egui::StrokeKind::Inside);
+
+            let inner = c_rect.shrink(18.0);
+            let badge_r = Rect::from_center_size(pos2(inner.left() + 26.0, inner.top() + 26.0), Vec2::splat(40.0));
+            super::transfer::badge(ui, badge_r);
+
+            let tx = badge_r.right() + 18.0;
+            ui.painter().text(pos2(tx, inner.top() + 8.0), egui::Align2::LEFT_TOP, "Spotify Synchronisation (Spottube-Modus)", theme::bold(18.0), theme::text());
+            ui.painter().text(pos2(tx, inner.top() + 32.0), egui::Align2::LEFT_TOP, "Verbinde deinen Spotify-Account, um deine Playlists und Lieblingssongs nahtlos in BitChord zu durchsuchen.", theme::regular(13.0), theme::text_dim());
+            ui.painter().text(pos2(tx, inner.top() + 50.0), egui::Align2::LEFT_TOP, "Alle Titel werden werbefrei und in bester Audioqualität über YouTube Music gestreamt (rein Musik, keine Podcasts).", theme::regular(12.5), theme::text_dim());
+
+            let btn_r = Rect::from_min_size(pos2(tx, inner.bottom() - 36.0), vec2(200.0, 34.0));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(btn_r), |ui| {
+                if pill(ui, "Mit Spotify verbinden", Some(icon::CIRCLE_USER), true).clicked() {
+                    app.start_spotify_sign_in(ui.ctx());
+                }
+            });
         }
     }
 }

@@ -319,24 +319,24 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
             }
         }
     }
-    // The star: a 30 px disc that washes under the pointer and fills in the accent
+    // The heart: a 30 px disc that washes under the pointer and fills in the accent
     // once liked. The ⋯ menu sits at the line's end, as on music.youtube.com.
     let liked = app.liked.contains(&heard.id);
-    let star = Rect::from_center_size(pos2(art.right() - 55.0, info_y + 14.0), Vec2::splat(30.0));
-    let sr = ui.interact(star, ui.scope_id().with(("np-like", &heard.id)), Sense::click());
-    let sr = named(sr, if liked { "Remove from favourites" } else { "Add to favourites" }).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let heart = Rect::from_center_size(pos2(art.right() - 55.0, info_y + 14.0), Vec2::splat(30.0));
+    let sr = ui.interact(heart, ui.scope_id().with(("np-like", &heard.id)), Sense::click());
+    let sr = named(sr, if liked { "Aus Favoriten entfernen" } else { "Zu Favoriten hinzufügen" }).on_hover_cursor(egui::CursorIcon::PointingHand);
     let sh = theme::anim_bool(ui.ctx(), sr.id.with("h"), sr.hovered(), 0.1);
     let pop = theme::anim_bool(ui.ctx(), ("liked", &heard.id), liked, 0.3);
     // The same translucent disc as the ⋯ beside it, a little brighter once liked.
     let disc = (0.09 + 0.07 * sh + 0.05 * pop).min(0.30);
     if disc > 0.0 {
-        ui.painter().circle_filled(star.center(), 15.0, theme::glass(disc));
+        ui.painter().circle_filled(heart.center(), 15.0, theme::glass(disc));
     }
     let dim = 0.85 + 0.15 * sh;
     let tint = theme::lerp_color(theme::with_alpha(Color32::WHITE, dim), app.accent_color(), pop);
-    super::glyphs::draw(ui, star.center(), 19.0, super::glyphs::STAR, tint);
+    super::glyphs::draw(ui, heart.center(), 19.0, super::glyphs::HEART, tint);
     if pop > 0.0 {
-        super::glyphs::draw(ui, star.center(), 19.0, super::glyphs::STAR_FILLED, theme::with_alpha(app.accent_color(), pop));
+        super::glyphs::draw(ui, heart.center(), 19.0, super::glyphs::HEART_FILLED, theme::with_alpha(app.accent_color(), pop));
     }
     if sr.clicked() {
         app.actions.push(Action::Like(heard.clone(), !liked));

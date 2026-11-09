@@ -478,13 +478,78 @@ impl App {
         self.audio.send(if playing { AudioCmd::Pause } else { AudioCmd::Resume });
     }
 
-    pub(super) fn shuffle_upcoming(&mut self) {
+    pub(super) fn toggle_shuffle(&mut self) {
         if self.jam.guest() {
             return self.toast("Only the host can shuffle the jam");
         }
-        if self.queue.shuffle_upcoming() {
-            self.toast("Shuffled up next");
+        let on = self.queue.toggle_shuffle();
+        if on {
+            self.toast("Shuffle on");
             self.prefetch_next();
+        } else {
+            self.toast("Shuffle off");
+        }
+    }
+
+    pub fn shuffle_mode(&self) -> bool {
+        self.queue.shuffle
+    }
+
+    pub(super) fn shuffle_upcoming(&mut self) {
+        self.toggle_shuffle();
+    }
+
+    /// Spicetify-inspired: Play a completely random song from library, history, or explore.
+    pub(super) fn play_random_song(&mut self) {
+        let mut pool: Vec<Track> = Vec::new();
+        if let Some(h) = &self.history {
+            pool.extend(h.iter().cloned());
+        }
+        if let Some(home) = &self.home {
+            for shelf in &home.shelves {
+                match &shelf.kind {
+                    crate::model::ShelfKind::Cards(cards) => {
+                        for c in cards {
+                            if let crate::model::Target::Song(t) = &c.target {
+                                pool.push(t.clone());
+                            }
+                        }
+                    }
+                    crate::model::ShelfKind::Songs { tracks, .. } => {
+                        pool.extend(tracks.iter().cloned());
+                    }
+                }
+            }
+        }
+        if let Some(explore) = &self.explore {
+            for c in &explore.charts {
+                if let crate::model::Target::Song(t) = &c.target {
+                    pool.push(t.clone());
+                }
+            }
+            pool.extend(explore.top.iter().cloned());
+        }
+        if let Some(u) = &self.uploads {
+            pool.extend(u.iter().cloned());
+        }
+        // Deduplicate pool by ID
+        let mut seen = std::collections::HashSet::new();
+        pool.retain(|t| seen.insert(t.id.clone()));
+
+        if !pool.is_empty() {
+            super::shuffle(&mut pool);
+            let pick = pool.pop().unwrap();
+            self.toast(format!("Random Song: {}", pick.title));
+            self.queue_source = None;
+            self.play_list(vec![pick.clone()], 0);
+            if !self.radio_pending {
+                self.radio_pending = true;
+                let song_of = self.song_of(&pick);
+                self.backend.request(Req::Radio { song_of, seed: pick.id });
+            }
+        } else {
+            self.toast("Discovering music…");
+            self.backend.request(Req::Explore(self.preferred_artist_ids()));
         }
     }
 }

@@ -5,6 +5,7 @@ mod apple;
 mod artist_signature;
 mod fullscreen;
 mod proxy;
+mod remote;
 mod renderer;
 mod art;
 mod audio;

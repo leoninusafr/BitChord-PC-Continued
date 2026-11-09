@@ -14,13 +14,13 @@ use crate::transfer::spotify::{Entry, Source, Track};
 use crate::transfer::{Account, Decision, Dest, Job, Phase, Search, is_likes};
 
 /// Spotify's green, for its badge.
-const SPOTIFY: Color32 = Color32::from_rgb(30, 215, 96);
+pub(super) const SPOTIFY: Color32 = Color32::from_rgb(30, 215, 96);
 
 /// What's being set up on the start screen (kept while browsing elsewhere).
 #[derive(Default)]
 pub struct Setup {
     /// The chosen library entry, by source.
-    picked: Option<Source>,
+    pub(super) picked: Option<Source>,
     link: String,
     /// Playlist name; follows the picked source until edited.
     name: String,
@@ -63,12 +63,12 @@ enum Tab {
     Missing,
 }
 
-fn spotify_thumbs(art: &Option<String>) -> Vec<Thumb> {
+pub(super) fn spotify_thumbs(art: &Option<String>) -> Vec<Thumb> {
     art.iter().map(|u| Thumb { url: u.clone(), width: 64, height: 64 }).collect()
 }
 
 /// The Spotify logo: a green rounded square with its three arcs.
-fn badge(ui: &Ui, rect: Rect) {
+pub(super) fn badge(ui: &Ui, rect: Rect) {
     ui.painter().rect_filled(rect, rect.width() * 0.27, SPOTIFY);
     let s = rect.width() / 24.0;
     let c = rect.center();

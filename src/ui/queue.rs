@@ -31,9 +31,11 @@ pub struct Filled {
 
 pub struct Queue {
     pub tracks: Vec<Track>,
+    pub original_tracks: Vec<Track>,
     /// The song playing (or paused, or loading).
     pub index: Option<usize>,
     pub repeat: Repeat,
+    pub shuffle: bool,
     /// The queue is a playlist played while its songs were still coming in: the rest
     /// join the queue as they arrive.
     pub fill: Option<QueueFill>,
@@ -46,7 +48,7 @@ const SAVED_AFTER: usize = 150;
 
 impl Queue {
     pub fn new(repeat: Repeat) -> Self {
-        Self { tracks: Vec::new(), index: None, repeat, fill: None }
+        Self { tracks: Vec::new(), original_tracks: Vec::new(), index: None, repeat, shuffle: false, fill: None }
     }
 
     pub fn current(&self) -> Option<&Track> {
@@ -64,18 +66,45 @@ impl Queue {
         if tracks.is_empty() {
             return false;
         }
+        self.original_tracks = tracks.clone();
         self.fill = fill;
         self.index = Some(start.min(tracks.len() - 1));
         self.tracks = tracks;
+        if self.shuffle {
+            self.shuffle_upcoming();
+        }
         true
     }
 
     /// Take up a queue from elsewhere (last session, another device), at `index`, which
     /// the caller has checked is one of `tracks`.
     pub fn adopt(&mut self, tracks: Vec<Track>, index: usize) {
+        self.original_tracks = tracks.clone();
         self.tracks = tracks;
         self.index = Some(index);
         self.fill = None;
+    }
+
+    /// Toggle Spotify-style shuffle mode on/off.
+    pub fn toggle_shuffle(&mut self) -> bool {
+        self.shuffle = !self.shuffle;
+        if self.shuffle {
+            self.shuffle_upcoming();
+        } else {
+            self.restore_order();
+        }
+        self.shuffle
+    }
+
+    /// Restore original playlist/album track order while preserving current track index.
+    pub fn restore_order(&mut self) {
+        if self.original_tracks.is_empty() {
+            return;
+        }
+        let Some(curr_t) = self.current().cloned() else { return };
+        let orig_pos = self.original_tracks.iter().position(|t| t.id == curr_t.id).unwrap_or(0);
+        self.tracks = self.original_tracks.clone();
+        self.index = Some(orig_pos);
     }
 
     /// Next, or the end of a song: true when there's a song to play. At the end of a

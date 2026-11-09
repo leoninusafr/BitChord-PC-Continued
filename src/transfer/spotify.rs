@@ -35,7 +35,7 @@ const OPERATIONS: [&str; 4] = ["fetchPlaylist", "fetchLibraryTracks", "libraryV3
 /// Where the query hashes are cached, so a new bundle (several MB) is read once per web-player release.
 const HASH_CACHE: &str = "spotify_queries.json";
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Track {
     pub name: String,
     pub artists: Vec<String>,
@@ -56,6 +56,7 @@ impl Track {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Playlist {
     pub name: String,
     pub tracks: Vec<Track>,
@@ -409,6 +410,19 @@ fn parse_track(item: &Value) -> Option<Track> {
     let mut track = ["itemV2", "item", "track"].iter().map(|k| &item[k]).find(|v| v.is_object()).unwrap_or(item);
     if track["data"].is_object() {
         track = &track["data"];
+    }
+    // Filter out podcasts and audiobooks strictly per user requirements
+    let typename = track["__typename"].as_str().unwrap_or_default();
+    if typename == "Episode"
+        || typename == "PodcastEpisode"
+        || typename == "AudiobookChapter"
+        || typename == "Audiobook"
+        || typename.contains("Episode")
+        || typename.contains("Audiobook")
+        || typename.contains("Podcast")
+        || track["episode"].as_bool().unwrap_or(false)
+    {
+        return None;
     }
     let name = track["name"].as_str()?.trim();
     if track["__typename"] == "LocalTrack" {

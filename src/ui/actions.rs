@@ -44,6 +44,91 @@ impl App {
                 self.play_list_filling(tracks, i, fill);
             }
             Action::TogglePlay => self.toggle(),
+            Action::ShuffleToggle => self.toggle_shuffle(),
+            Action::PlayRandomSong => self.play_random_song(),
+            Action::ToggleDetails => self.details_open = !self.details_open,
+            Action::ToggleDevices => self.devices_open = !self.devices_open,
+            Action::PlaySpotify(t) => {
+                let cache_key = format!("{} - {}", t.name.to_lowercase(), t.artists.join(", ").to_lowercase());
+                let cached = self.spotify_cache.lock().unwrap().get(&cache_key).cloned();
+                if let Some(hit) = cached {
+                    self.play_list(vec![hit], 0);
+                } else {
+                    self.toast(format!("Spottube: Suche \"{}\"...", t.name));
+                    let api = self.backend.api();
+                    let cache = self.spotify_cache.clone();
+                    let bg_actions = self.bg_actions.clone();
+                    let b = self.backend.clone();
+                    self.backend.spawn(async move {
+                        if let Some(hit) = crate::transfer::match_spotify_track(&api, &t).await {
+                            cache.lock().unwrap().insert(cache_key, hit.clone());
+                            bg_actions.lock().unwrap().push(Action::Play(vec![hit], 0));
+                            b.wake();
+                        }
+                    });
+                }
+            }
+            Action::PlaySpotifyPlaylist(tracks, start_index) => {
+                if tracks.is_empty() || start_index >= tracks.len() {
+                    return;
+                }
+                let first_t = tracks[start_index].clone();
+                let cache_key = format!("{} - {}", first_t.name.to_lowercase(), first_t.artists.join(", ").to_lowercase());
+                let cached = self.spotify_cache.lock().unwrap().get(&cache_key).cloned();
+                let api = self.backend.api();
+                let cache = self.spotify_cache.clone();
+                let bg_actions = self.bg_actions.clone();
+                let b = self.backend.clone();
+                let remaining_tracks = tracks;
+
+                if let Some(hit) = &cached {
+                    self.play_list(vec![hit.clone()], 0);
+                } else {
+                    self.toast(format!("Spottube: Starte \"{}\"...", first_t.name));
+                }
+
+                self.backend.spawn(async move {
+                    if cached.is_none() {
+                        if let Some(hit) = crate::transfer::match_spotify_track(&api, &first_t).await {
+                            cache.lock().unwrap().insert(cache_key, hit.clone());
+                            bg_actions.lock().unwrap().push(Action::Play(vec![hit], 0));
+                            b.wake();
+                        }
+                    }
+
+                    // Background pre-match next tracks to fill the queue
+                    let mut count = 0;
+                    for (idx, t) in remaining_tracks.iter().enumerate() {
+                        if idx <= start_index {
+                            continue;
+                        }
+                        if count >= 20 {
+                            break;
+                        }
+                        let k = format!("{} - {}", t.name.to_lowercase(), t.artists.join(", ").to_lowercase());
+                        let matched = {
+                            let guard = cache.lock().unwrap();
+                            guard.get(&k).cloned()
+                        };
+                        let hit = match matched {
+                            Some(h) => Some(h),
+                            None => {
+                                if let Some(h) = crate::transfer::match_spotify_track(&api, t).await {
+                                    cache.lock().unwrap().insert(k, h.clone());
+                                    Some(h)
+                                } else {
+                                    None
+                                }
+                            }
+                        };
+                        if let Some(h) = hit {
+                            bg_actions.lock().unwrap().push(Action::Enqueue(h));
+                            b.wake();
+                            count += 1;
+                        }
+                    }
+                });
+            }
             Action::TransferPick(t) => transfer::use_pick(self, t),
             // Kept already: at once. A playlist that isn't starts with its first page.
             Action::PlayCollection(Target::Album(id) | Target::Playlist(id), shuffle) if self.opened(&id).is_some() => self.play_opened(id, shuffle),
