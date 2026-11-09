@@ -15,7 +15,9 @@
 #else
   #define Arch "x64compatible"
   #define Suffix ""
-  #define BinDir "..\target\release"
+  #ifndef BinDir
+    #define BinDir "..\target\x86_64-pc-windows-gnu\release"
+  #endif
 #endif
 
 [Setup]
@@ -64,8 +66,12 @@ Root: HKA; Subkey: "Software\Classes\ytm-rs\DefaultIcon"; ValueType: string; Val
 Root: HKA; Subkey: "Software\Classes\ytm-rs\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
 
 [UninstallDelete]
-; Installers downloaded by the in-app updater.
-Type: filesandordirs; Name: "{userappdata}\ytm-rs\data\updates"
+; 100% restlose Deinstallation: Alle App-Daten, Caches, Konfigurationen und temp. Dateien entfernen
+Type: filesandordirs; Name: "{userappdata}\ytm-rs"
+Type: filesandordirs; Name: "{localappdata}\ytm-rs"
+Type: filesandordirs; Name: "{userappdata}\BitChord"
+Type: filesandordirs; Name: "{localappdata}\BitChord"
+Type: filesandordirs; Name: "{app}"
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
