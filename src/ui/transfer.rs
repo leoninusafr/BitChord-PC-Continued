@@ -1417,6 +1417,15 @@ pub fn settings_section(app: &mut App, ui: &mut Ui) {
         open = pill(&mut child, "Open", None, true).clicked();
         super::pages::divider(ui);
         spotify_account_row(app, ui, &account, false);
+        super::pages::divider(ui);
+        super::pages::setting_row(
+            ui,
+            "2-Way Spotify Sync",
+            Some("Keep BitChord playlists synchronized with your Spotify library. Disabled by default to prevent accidental duplicates."),
+            |ui| {
+                super::pages::toggle(ui, &mut app.spotify_two_way_sync, "2-Way Spotify Sync");
+            },
+        );
     });
     if open {
         app.actions.push(Action::Go(Page::Transfer));

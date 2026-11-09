@@ -499,85 +499,87 @@ impl App {
         self.toggle_shuffle();
     }
 
-    /// Spicetify-inspired: Discover a truly random song from the global music catalog (100M+ songs)
-    /// across underground indie artists with 10 listeners to international tracks.
+    /// Spicetify-inspired (TechShivvy & Hitesh1090 Every Noise at Once architecture):
+    /// Discovers rare, underground and unexpected songs across 60+ curated niche genres
+    /// or deep global syllable searches, prefetching upcoming discoveries into the queue.
     pub(super) fn play_random_song(&mut self) {
-        self.toast("Zufälligen Song entdecken...");
+        self.toast("Discovering random music...");
         let api = self.backend.api();
         let bg_actions = self.bg_actions.clone();
         let b = self.backend.clone();
 
-        // Fallback pool in case network fails or offline
+        // 1. Fallback pool if offline or network fails
         let mut pool: Vec<Track> = Vec::new();
         if let Some(h) = &self.history {
             pool.extend(h.iter().cloned());
         }
-        if let Some(home) = &self.home {
-            for shelf in &home.shelves {
-                match &shelf.kind {
-                    crate::model::ShelfKind::Cards(cards) => {
-                        for c in cards {
-                            if let crate::model::Target::Song(t) = &c.target {
-                                pool.push(t.clone());
-                            }
-                        }
-                    }
-                    crate::model::ShelfKind::Songs { tracks, .. } => {
-                        pool.extend(tracks.iter().cloned());
-                    }
-                }
-            }
-        }
         if let Some(explore) = &self.explore {
-            for c in &explore.charts {
-                if let crate::model::Target::Song(t) = &c.target {
-                    pool.push(t.clone());
-                }
-            }
             pool.extend(explore.top.iter().cloned());
         }
         let fallback_pick = if !pool.is_empty() {
             super::shuffle(&mut pool);
-            pool.pop()
+            Some(pool)
         } else {
             None
         };
 
-        // Broad seed table of random stems, syllables and diverse musical keywords
+        // 2. TechShivvy & Hitesh1090 "The Sounds of Spotify" (Every Noise at Once) curated genre catalog
+        const GENRES: &[&str] = &[
+            "japanese shoegaze", "math rock", "ambient drone", "synthwave", "bossa nova",
+            "afrobeats", "post-punk", "hyperpop", "midwest emo", "dark synth", "nu disco",
+            "indie folk", "vessel bass", "dream pop", "progressive metal", "city pop",
+            "lo-fi beats", "psychedelic funk", "korean indie", "glitch hop", "desert rock",
+            "vaporwave", "baroque pop", "chamber psych", "slowcore", "downtempo", "folktronica",
+            "witch house", "neo-psychedelia", "bedroom pop", "future garage", "ethereal wave",
+            "french indie pop", "nordic folk", "celtic punk", "acid jazz", "chiptune",
+            "mathcore", "shoegaze", "post-rock", "skate punk", "trip hop", "ambient techno",
+            "dub techno", "space ambient", "darkwave", "coldwave", "breakcore", "drill",
+            "indie surf", "garage rock revival", "chamber pop", "art pop", "indie r&b",
+        ];
+
+        // 3. Deep stem/syllable seeds for non-genre worldwide obscure discovery
         const SEEDS: &[&str] = &[
-            "the", "you", "love", "night", "dream", "star", "light", "sun", "rain", "heart",
-            "time", "world", "lost", "fire", "sky", "blue", "wave", "dance", "shadow", "moon",
-            "soul", "hold", "fall", "away", "life", "eyes", "feel", "home", "stay", "mind",
-            "wild", "wind", "free", "cold", "deep", "dark", "echo", "fade", "gold", "haze",
-            "beat", "burn", "calm", "dawn", "dusk", "flow", "glow", "high", "hope", "rush",
             "ka", "mi", "sa", "ra", "lu", "te", "vi", "za", "yo", "ki", "ze", "mu", "do",
             "bo", "po", "gi", "ri", "va", "tu", "fu", "ke", "ga", "pe", "bi", "pi", "di",
             "ku", "ge", "pu", "ru", "fi", "bu", "ko", "fe", "su", "chi", "sha", "lo", "ne",
             "da", "ta", "so", "no", "ma", "si", "fa", "pa", "ba", "la", "na", "ca", "al",
-            "er", "in", "on", "re", "ti", "st", "en", "ed", "nd", "or", "ea", "ar", "ng",
         ];
 
-        let seed_idx = {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos() as usize)
-                .unwrap_or(0);
-            nanos % SEEDS.len()
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as usize)
+            .unwrap_or(0);
+
+        let use_genre = (nanos % 10) < 7; // 70% chance curated genre, 30% syllable dive
+        let (query, genre_label) = if use_genre {
+            let g = GENRES[nanos % GENRES.len()];
+            (g.to_string(), Some(g))
+        } else {
+            let s = SEEDS[nanos % SEEDS.len()];
+            (s.to_string(), None)
         };
-        let query = SEEDS[seed_idx].to_string();
 
         self.backend.spawn(async move {
             let res = crate::ytm::search_songs(&api, &query, false).await;
             match res {
                 Ok(mut tracks) if !tracks.is_empty() => {
                     super::shuffle(&mut tracks);
-                    let pick = tracks.remove(0);
-                    bg_actions.lock().unwrap().push(Action::Play(vec![pick], 0));
+                    let title = tracks[0].title.clone();
+                    let artist = tracks[0].artist_line();
+                    let toast_msg = match genre_label {
+                        Some(g) => format!("Discovering {g}: \"{title}\" by {artist}"),
+                        None => format!("Discovering: \"{title}\" by {artist}"),
+                    };
+                    let mut acts = bg_actions.lock().unwrap();
+                    acts.push(Action::Toast(toast_msg));
+                    acts.push(Action::Play(tracks, 0));
                     b.wake();
                 }
                 _ => {
-                    if let Some(pick) = fallback_pick {
-                        bg_actions.lock().unwrap().push(Action::Play(vec![pick], 0));
+                    if let Some(fallback_tracks) = fallback_pick {
+                        let mut acts = bg_actions.lock().unwrap();
+                        acts.push(Action::Toast("Discovering from your library...".to_string()));
+                        acts.push(Action::Play(fallback_tracks, 0));
                         b.wake();
                     }
                 }

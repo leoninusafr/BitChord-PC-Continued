@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 pub struct Variant {
     pub id: &'static str,
+    #[allow(dead_code)]
     pub name: &'static str,
     /// An ICO whose entries are PNGs, from 16 to 256 px.
     ico: &'static [u8],

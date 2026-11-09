@@ -53,6 +53,7 @@ impl App {
                 }
             }
             Action::ToggleDevices => self.devices_open = !self.devices_open,
+            Action::Toast(msg) => self.toast(msg),
             Action::PlaySpotify(t) => {
                 let cache_key = format!("{} - {}", t.name.to_lowercase(), t.artists.join(", ").to_lowercase());
                 let cached = self.spotify_cache.lock().unwrap().get(&cache_key).cloned();

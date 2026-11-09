@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const LATEST: &str = "https://api.github.com/repos/grapedjuice/ytm-rs/releases/latest";
+#[allow(dead_code)]
 const ALL_RELEASES: &str = "https://api.github.com/repos/grapedjuice/ytm-rs/releases";
 const BY_TAG: &str = "https://api.github.com/repos/grapedjuice/ytm-rs/releases/tags/v";
 pub const RELEASES: &str = "https://github.com/grapedjuice/ytm-rs/releases";
@@ -49,6 +50,7 @@ pub struct Updater {
     wake: Arc<dyn Fn() + Send + Sync>,
     notes: Notes,
     /// Total downloads of every release asset: None until asked, Some(None) while fetching.
+    #[allow(dead_code)]
     downloads: Arc<Mutex<Option<Option<u64>>>>,
 }
 
@@ -185,6 +187,7 @@ impl Updater {
     /// How many times ytm-rs has been downloaded: every release asset's GitHub download
     /// count added up (installers, plus the copies the updater fetched). Fetched in the
     /// background the first time it's asked for; `None` until it arrives.
+    #[allow(dead_code)]
     pub fn downloads(&self) -> Option<u64> {
         {
             let mut d = self.downloads.lock().unwrap();

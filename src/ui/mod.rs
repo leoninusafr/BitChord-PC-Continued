@@ -91,6 +91,7 @@ pub enum NpTab {
 }
 
 /// User intents collected while drawing; applied after the frame's UI pass.
+#[allow(dead_code)]
 pub enum Action {
     Play(Vec<Track>, usize),
     PlayCollection(Target, bool),
@@ -144,6 +145,8 @@ pub enum Action {
     PlaySpotify(crate::transfer::spotify::Track),
     /// Play a Spotify playlist starting at an index, matching tracks on the fly.
     PlaySpotifyPlaylist(Vec<crate::transfer::spotify::Track>, usize),
+    /// Display a floating toast banner with message.
+    Toast(String),
 }
 
 enum Dialog {
@@ -425,6 +428,7 @@ pub struct App {
     /// supplied it, with the generation it belongs to.
     audio_info: Option<(u64, crate::hires::Info)>,
     accent: Color32,
+    accent_curr: Color32,
     /// Selected theme preset (see `preset.rs`).
     theme_id: String,
     /// Preset whose chrome (glass, corner radius) is installed in the egui style.
@@ -471,6 +475,10 @@ pub struct App {
     np_tab: NpTab,
     queue_open: bool,
     pub details_open: bool,
+    pub details_width: f32,
+    pub sidebar_width: f32,
+    pub followed_artists: HashSet<String>,
+    pub spotify_two_way_sync: bool,
     pub devices_open: bool,
     pub remote_server: Option<crate::remote::RemoteServer>,
     pub remote_qr: Option<egui::TextureHandle>,
@@ -743,6 +751,7 @@ impl App {
             audio_info: None,
             art_changed: -10.0,
             accent: theme::RED,
+            accent_curr: theme::RED,
             theme_id: crate::preset::DEFAULT_ID.to_owned(),
             chrome_applied: None,
             // Dev hook: YTM_APPEARANCE=light|dark|system tries a mode without saving it.
@@ -771,6 +780,10 @@ impl App {
             np_tab: if get("np_art").is_some_and(|v| v == "1") { NpTab::Art } else { NpTab::Lyrics },
             queue_open: false,
             details_open: false,
+            details_width: 340.0,
+            sidebar_width: 250.0,
+            followed_artists: Default::default(),
+            spotify_two_way_sync: false,
             devices_open: false,
             remote_server: Some(crate::remote::RemoteServer::new()),
             remote_qr: None,
@@ -1079,7 +1092,7 @@ impl App {
         Some(widgets::MotionSprite { id: tex.id(), size: tex.size_vec2() })
     }
 
-    fn accent_color(&self) -> Color32 {
+    fn target_accent(&self) -> Color32 {
         // If current song has sampled album art accent, use it for dynamic cover tinting!
         if self.accent != theme::RED {
             let c = self.accent;
@@ -1100,6 +1113,10 @@ impl App {
         } else {
             theme::RED // #FA2D48 BitChord Mobile Signature Coral Red
         }
+    }
+
+    fn accent_color(&self) -> Color32 {
+        self.accent_curr
     }
 
     /// Whether pages draw light: only the ytm-rs theme has a light mode, and it follows
@@ -1169,22 +1186,27 @@ impl App {
         }
 
         if let Some(srv) = self.remote_server.as_ref() {
-            let track = self.playing_track().cloned().or_else(|| self.current().cloned());
+            let track = self.shown().cloned().or_else(|| self.current().cloned());
             let status = &self.audio.status;
-            let total = status.duration().map(|d| d.as_secs_f32())
-                .or(track.as_ref().and_then(|t| t.duration).map(|d| d as f32))
-                .unwrap_or(0.0);
-            let pos = status.position_smooth().as_secs_f32();
+            let (total, pos) = if let Some(h) = self.mix_hold() {
+                (h.total, self.mix_hold_pos(h))
+            } else {
+                let total = status.duration().map(|d| d.as_secs_f32())
+                    .or(track.as_ref().and_then(|t| t.duration).map(|d| d as f32))
+                    .unwrap_or(0.0);
+                let pos = status.position_smooth().as_secs_f32();
+                (total, pos)
+            };
             let repeat_str = match self.queue.repeat {
                 Repeat::Off => "off",
                 Repeat::All => "all",
                 Repeat::One => "one",
             };
             let remote_state = crate::remote::RemoteState {
-                title: track.as_ref().map(|t| t.title.clone()).unwrap_or_else(|| "Kein Titel".to_string()),
+                title: track.as_ref().map(|t| t.title.clone()).unwrap_or_else(|| "No track playing".to_string()),
                 artist: track.as_ref().map(|t| t.artist_line()).unwrap_or_else(|| "BitChord".to_string()),
                 album: track.as_ref().and_then(|t| t.album.as_ref().map(|a| a.name.clone())),
-                cover_url: track.as_ref().and_then(|t| t.thumbs.first().map(|th| th.url.clone())),
+                cover_url: track.as_ref().and_then(|t| t.thumbs.last().map(|th| th.url.clone())),
                 duration_secs: total,
                 position_secs: pos,
                 is_playing: self.playing(),
@@ -1206,6 +1228,21 @@ impl eframe::App for App {
         self.lyric_view.release_hidden(ctx.cumulative_pass_nr());
         let now = ctx.input(|i| i.time);
         self.sync_look();
+
+        // Smooth accent color transitions between tracks
+        let target_accent = self.target_accent();
+        if self.accent_curr != target_accent {
+            let dt = ctx.input(|i| i.stable_dt).min(0.1);
+            let factor = (dt * 8.0).min(1.0);
+            self.accent_curr = theme::lerp_color(self.accent_curr, target_accent, factor);
+            ctx.request_repaint();
+        }
+
+        // Ctrl+B shortcut to toggle sidebar collapsed/expanded
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::B)) {
+            self.sidebar_collapsed = !self.sidebar_collapsed;
+        }
+
         self.pump(now);
         self.skip_segments(ctx, now);
         // System media controls and taskbar buttons follow the player however it changed.
@@ -1323,6 +1360,14 @@ impl eframe::App for App {
         let now = ctx.input(|i| i.time);
         let screen = ctx.content_rect();
 
+        // Enforce solid background pre-fill so window resize never flashes black screen
+        ui.painter().rect_filled(screen, 0.0, theme::bg());
+
+        // Keep window within sane min-dimensions so UI never collapses
+        if !self.fullscreen && !self.mini.busy() && (screen.width() < 760.0 || screen.height() < 480.0) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(760.0, 480.0)));
+        }
+
         self.sync_look();
         let look = self.look();
         // Now playing is dark; once it's most of the way up, so is the player bar under it.
@@ -1391,11 +1436,45 @@ impl eframe::App for App {
                     .outer_margin(egui::Margin { left: 10, right: 4, top: 10, bottom: 10 })
                     .inner_margin(egui::Margin::symmetric(12, 14)),
             };
-            egui::Panel::left("nav").resizable(false)
-                .exact_size(shell::SIDEBAR_W - (shell::SIDEBAR_W - shell::RAIL_W) * shell::sidebar_collapse(self, &ctx))
+            let collapse = shell::sidebar_collapse(self, &ctx);
+            let target_w = self.sidebar_width.clamp(200.0, 420.0);
+            let is_collapsed = self.sidebar_collapsed || collapse > 0.05;
+            let current_w = if is_collapsed {
+                shell::RAIL_W + (target_w - shell::RAIL_W) * (1.0 - collapse)
+            } else {
+                target_w
+            };
+
+            let nav_panel = egui::Panel::left("nav");
+            let nav_panel = if collapse > 0.05 && collapse < 0.95 {
+                nav_panel.resizable(false).exact_size(current_w)
+            } else if is_collapsed {
+                nav_panel.resizable(true)
+                    .size_range(shell::RAIL_W..=420.0)
+                    .default_size(shell::RAIL_W)
+            } else {
+                nav_panel.resizable(true)
+                    .size_range(140.0..=420.0)
+                    .default_size(target_w)
+            };
+
+            let res = nav_panel
                 .frame(side_frame)
                 .show_separator_line(false)
                 .show(ui, |ui| shell::sidebar(self, ui));
+
+            let w = res.response.rect.width();
+            if self.sidebar_collapsed {
+                if w > 115.0 {
+                    self.sidebar_collapsed = false;
+                }
+            } else {
+                if w < 160.0 {
+                    self.sidebar_collapsed = true;
+                } else if w >= 190.0 {
+                    self.sidebar_width = w.clamp(200.0, 420.0);
+                }
+            }
         }
         if !self.fullscreen && !covered {
             let q = theme::anim_bool(&ctx, "queue-drawer", self.queue_open && !self.np_open, 0.25);
@@ -1408,11 +1487,20 @@ impl eframe::App for App {
             }
             let d = theme::anim_bool(&ctx, "np-details-drawer", self.details_open && !self.np_open, 0.25);
             if d > 0.01 {
-                egui::Panel::right("np-details").resizable(false)
-                    .exact_size(330.0 * d)
+                let target_w = self.details_width.clamp(260.0, 520.0);
+                egui::Panel::right("np-details")
+                    .resizable(true)
+                    .size_range((260.0 * d)..=(520.0 * d))
+                    .default_size(target_w * d)
                     .frame(egui::Frame::new().fill(theme::panel(0.42)).inner_margin(egui::Margin::symmetric(14, 16)))
                     .show_separator_line(false)
-                    .show(ui, |ui| details::details_panel(self, ui));
+                    .show(ui, |ui| {
+                        let w = ui.available_width();
+                        if w > 200.0 && (d - 1.0).abs() < 0.05 {
+                            self.details_width = w.clamp(260.0, 520.0);
+                        }
+                        details::details_panel(self, ui);
+                    });
             }
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().inner_margin(egui::Margin { left: 28, right: 28, top: titlebar::top_margin(14, 42.0), bottom: 12 }))

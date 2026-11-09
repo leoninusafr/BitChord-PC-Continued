@@ -18,6 +18,7 @@ pub struct Frame {
 }
 
 pub struct Motion {
+    #[allow(dead_code)]
     url: String,
     latest: Mutex<Option<Arc<Frame>>>,
     version: AtomicU64,
@@ -35,6 +36,7 @@ impl Motion {
         Some((self.version.load(Ordering::Acquire), frame))
     }
 
+    #[allow(dead_code)]
     pub fn url(&self) -> &str {
         &self.url
     }

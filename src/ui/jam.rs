@@ -84,6 +84,7 @@ impl Session {
         self.active() && !self.is_host()
     }
 
+    #[allow(dead_code)]
     pub fn member_count(&self) -> usize {
         self.members.len()
     }
@@ -704,14 +705,14 @@ fn room(app: &mut App, ui: &mut Ui) {
         // Authentic PNG QR Code (strictly NO text/ASCII QR)
         if host && !code.is_empty() {
             ui.add_space(12.0);
-            let qr_id = ui.id().with(("jam-qr-toggle", &code));
+            let qr_id = ui.scope_id().with(("jam-qr-toggle", &code));
             let mut show_qr = ui.data(|d| d.get_temp::<bool>(qr_id).unwrap_or(false));
-            if pill(ui, if show_qr { "QR-Code ausblenden" } else { "QR-Code anzeigen" }, Some(icon::MAXIMIZE_2), false).clicked() {
+            if pill(ui, if show_qr { "Hide QR code" } else { "Show QR code" }, Some(icon::MAXIMIZE_2), false).clicked() {
                 show_qr = !show_qr;
                 ui.data_mut(|d| d.insert_temp(qr_id, show_qr));
             }
             if show_qr {
-                let key = egui::Id::new(("jam-qr-tex", &code));
+                let key = egui::Id::unique(("jam-qr-tex", &code));
                 let tex = ui.ctx().data_mut(|d| {
                     d.get_temp::<egui::TextureHandle>(key).unwrap_or_else(|| {
                         let png = crate::remote::generate_qr_png_bytes(&jam_link).unwrap_or_default();

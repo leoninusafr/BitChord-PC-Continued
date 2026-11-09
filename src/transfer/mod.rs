@@ -427,6 +427,7 @@ impl Transfer {
     }
 
     /// Refresh Spotify library in the background.
+    #[allow(dead_code)]
     pub fn refresh_spotify_library(self: &Arc<Self>, rt: &crate::backend::Backend) {
         if matches!(*self.account.lock().unwrap(), Account::SignedIn { .. }) {
             self.load_account(rt);

@@ -381,12 +381,19 @@ impl Background {
     }
 
     pub fn paint(&self, painter: &egui::Painter, rect: egui::Rect, p: Params) {
+        if rect.width() < 10.0 || rect.height() < 10.0 {
+            return;
+        }
         if self.wgpu {
             painter.add(eframe::egui_wgpu::Callback::new_paint_callback(rect, WgpuPaint { pending: self.pending.clone(), rect, p }));
             return;
         }
         let (gl_state, pending) = (self.gl.clone(), self.pending.clone());
         let cb = eframe::egui_glow::CallbackFn::new(move |info, painter| {
+            let vp = info.viewport_in_pixels();
+            if vp.width_px < 10 || vp.height_px < 10 {
+                return;
+            }
             let gl = painter.gl();
             let mut guard = gl_state.lock().unwrap();
             let Some(s) = guard.as_mut() else { return };
@@ -412,8 +419,7 @@ impl Background {
                 gl.uniform_1_f32(scale.as_ref(), p.scale);
                 gl.uniform_1_f32(saturation.as_ref(), p.saturation);
                 gl.uniform_1_f32(dim.as_ref(), p.dim);
-                let vp = info.viewport_in_pixels();
-                gl.uniform_2_f32(resolution.as_ref(), vp.width_px as f32, vp.height_px as f32);
+                gl.uniform_2_f32(resolution.as_ref(), (vp.width_px as f32).max(1.0), (vp.height_px as f32).max(1.0));
                 gl.draw_arrays(glow::TRIANGLES, 0, 3);
             }
         });

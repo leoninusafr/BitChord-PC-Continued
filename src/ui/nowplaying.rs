@@ -6,7 +6,7 @@ use egui::{Color32, Rect, Sense, Ui, Vec2, pos2, vec2};
 
 use super::widgets::{self, icon_button, named, text_at};
 use super::{Action, App, NpTab, Repeat, karaoke};
-use crate::lyrics::{Lyrics, Provider, Sync, SyncKind};
+use crate::lyrics::{Lyrics, Sync, SyncKind};
 use crate::shader::Params;
 use crate::theme::{self, icon};
 
@@ -29,6 +29,14 @@ pub fn overlay(app: &mut App, ctx: &egui::Context, now: f64) {
         .show(ctx, |ui| {
             // Swallow input so the page underneath doesn't react.
             ui.allocate_rect(rect, Sense::click_and_drag());
+            // Escape exits fullscreen or now playing
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if app.fullscreen {
+                    app.set_fullscreen(ctx, false);
+                } else {
+                    app.np_open = false;
+                }
+            }
             // It covers the window's top too: that still moves the window.
             if !app.fullscreen {
                 super::titlebar::drag_area(ui, Rect::from_min_size(rect.min, vec2(rect.width(), super::titlebar::HEIGHT)), "now-playing");
@@ -110,6 +118,9 @@ fn body(app: &mut App, ui: &mut Ui, now: f64) {
     }
     hui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.add_space(super::titlebar::right_gap(ui.ctx(), ui.max_rect(), 0.0));
+        if app.fullscreen && icon_button(ui, icon::SHRINK, 20.0, "Exit fullscreen (Esc)", false).clicked() {
+            app.set_fullscreen(ui.ctx(), false);
+        }
         // Its actions (like, download, share…) are for what's heard: a song version
         // standing in for the music video. It lives beside the star under the cover;
         // only when the cover column is hidden (a narrow window showing lyrics) does
@@ -285,7 +296,17 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     let info_y = art.bottom() + 22.0;
     // The star and the ⋯ menu share the information line's right end.
     let text_w = w - 76.0;
-    text_at(ui, pos2(x0, info_y), &track.title, theme::semibold(17.0), Color32::WHITE, text_w);
+    let title_rect = Rect::from_min_size(pos2(x0, info_y), vec2(text_w, 22.0));
+    widgets::marquee_title(
+        ui,
+        ui.scope_id().with("nowplaying-title"),
+        title_rect,
+        &track.title,
+        theme::semibold(17.0),
+        Color32::WHITE,
+        app.playing(),
+        true,
+    );
     // Each artist opens their own page (features included); the album follows the
     // artist behind an em dash, as the reference writes the line.
     let mut line = track.artist_line();
@@ -494,13 +515,24 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     if r.clicked() && enabled {
         app.next();
     }
-    let (glyph, on) = match app.queue.repeat {
-        Repeat::Off => (super::glyphs::REPEAT, false),
-        Repeat::All => (super::glyphs::REPEAT, true),
-        Repeat::One => (super::glyphs::REPEAT_ONE, true),
+    let (is_repeat_one, on, tip) = match app.queue.repeat {
+        Repeat::Off => (false, false, "Enable repeat (All)"),
+        Repeat::All => (false, true, "Repeat current song (Repeat 1)"),
+        Repeat::One => (true, true, "Disable repeat"),
     };
-    let (r, h, p) = btn(ui, 4, "repeat", "Repeat", true);
-    super::glyphs::draw(ui, r.rect.center(), icons[4] * (1.0 - 0.1 * p), glyph, if on { app.accent_color() } else { ink(h, 0.55, 1.0) });
+    let (r, h, p) = btn(ui, 4, "repeat", tip, true);
+    let scale = 1.0 - 0.1 * p;
+    let fg = if on { app.accent_color() } else { ink(h, 0.55, 1.0) };
+    super::glyphs::draw(ui, r.rect.center(), icons[4] * scale, super::glyphs::REPEAT, fg);
+    if is_repeat_one {
+        ui.painter().text(
+            r.rect.center() + vec2(0.5, 0.0),
+            egui::Align2::CENTER_CENTER,
+            "1",
+            theme::bold(10.0 * scale),
+            fg,
+        );
+    }
     if r.clicked() {
         app.queue.repeat = match app.queue.repeat {
             Repeat::Off => Repeat::All,
@@ -526,8 +558,10 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
 // ------------------------------------------------------------------ lyrics
 
 fn lyrics_panel(app: &mut App, ui: &mut Ui, rect: Rect, now: f64, centered: bool) {
+    let curr_id: Option<String> = app.playing_id().or_else(|| app.current_id()).map(|s| s.to_owned());
     // Lent out for the frame rather than cloned (the drawing needs `app` mutably).
-    let Some((id, set)) = app.lyrics.take() else {
+    // Ensure lyrics strictly match the currently playing song ID to eliminate skipping glitch!
+    let Some((id, set)) = app.lyrics.take().filter(|(id, _)| curr_id.as_deref() == Some(id.as_str())) else {
         ui.add_space(rect.height() * 0.35);
         ui.vertical_centered(|ui| {
             ui.spinner();
@@ -852,7 +886,7 @@ fn quality_icon_aspect(atmos: bool) -> f32 {
 /// The icon as white pixels with its own alpha, so it takes the badge's tint.
 fn quality_icon_texture(ui: &Ui, atmos: bool) -> egui::TextureHandle {
     let ctx = ui.ctx();
-    let id = egui::Id::new(("quality-icon", atmos));
+    let id = egui::Id::unique(("quality-icon", atmos));
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return tex;
     }

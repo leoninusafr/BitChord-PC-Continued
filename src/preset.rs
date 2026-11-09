@@ -374,6 +374,7 @@ impl Preset {
     }
 
     /// The accent to use given the one sampled from the current cover.
+    #[allow(dead_code)]
     pub fn accent(&self, from_cover: Color32) -> Color32 {
         if self.accent == "system" {
             return crate::theme::system_accent().unwrap_or(from_cover);
@@ -418,6 +419,7 @@ pub fn all() -> &'static [Preset] {
     })
 }
 
+#[allow(dead_code)]
 pub fn get(id: &str) -> &'static Preset {
     all().iter().find(|p| p.id == id).unwrap_or(&all()[0])
 }
@@ -435,6 +437,7 @@ pub fn active() -> &'static Preset {
 }
 
 /// The preset's cover thumbnail (JPEG), if it has one.
+#[allow(dead_code)]
 pub fn cover(id: &str) -> Option<&'static [u8]> {
     const COVERS: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/theme_covers.rs"));
     COVERS.iter().find(|(k, _)| *k == id).map(|(_, b)| *b)

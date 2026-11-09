@@ -176,6 +176,7 @@ fn read_system_light() -> Option<bool> {
 /// surfaces (`AccentPalette`'s second entry), or the base accent if there's no palette.
 /// Read again every couple of seconds, so a new colour picked in Windows' settings
 /// shows without a restart. `None` off Windows or when the setting can't be read.
+#[allow(dead_code)]
 pub fn system_accent() -> Option<Color32> {
     use std::time::{Duration, Instant};
     static ACCENT: std::sync::Mutex<Option<(Instant, Option<Color32>)>> = std::sync::Mutex::new(None);
@@ -286,6 +287,7 @@ pub fn icon_font(size: f32) -> FontId {
 }
 
 /// Lucide icons (ISC), subset to the glyphs used here.
+#[allow(unused)]
 pub mod icon {
     pub const HOUSE: char = '\u{e0f5}';
     pub const COMPASS: char = '\u{e09b}';

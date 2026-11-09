@@ -62,17 +62,31 @@ impl Queue {
 
     /// Play `tracks` from `start`; `fill`: a playlist still coming in, whose other songs
     /// follow. False (and nothing changes) when there are none.
-    pub fn replace(&mut self, tracks: Vec<Track>, start: usize, fill: Option<QueueFill>) -> bool {
+    pub fn replace(&mut self, mut tracks: Vec<Track>, start: usize, fill: Option<QueueFill>) -> bool {
         if tracks.is_empty() {
             return false;
         }
         self.original_tracks = tracks.clone();
         self.fill = fill;
-        self.index = Some(start.min(tracks.len() - 1));
-        self.tracks = tracks;
-        if self.shuffle {
-            self.shuffle_upcoming();
+        if self.shuffle && !tracks.is_empty() {
+            if start == 0 && tracks.len() > 1 {
+                // Starting a playlist with shuffle enabled: pick a random start track by shuffling all
+                super::shuffle(&mut tracks);
+                self.index = Some(0);
+            } else {
+                // User clicked a specific song: start with it and shuffle upcoming songs around it
+                let picked = start.min(tracks.len() - 1);
+                tracks.swap(0, picked);
+                self.index = Some(0);
+                super::shuffle(&mut tracks[1..]);
+            }
+            if let Some(fill) = &mut self.fill {
+                fill.shuffled = true;
+            }
+        } else {
+            self.index = Some(start.min(tracks.len().saturating_sub(1)));
         }
+        self.tracks = tracks;
         true
     }
 

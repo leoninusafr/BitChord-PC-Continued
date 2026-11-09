@@ -44,6 +44,7 @@ pub enum RemoteCommand {
 #[derive(Clone)]
 pub struct RemoteServer {
     state: Arc<Mutex<RemoteState>>,
+    #[allow(dead_code)]
     cmd_tx: std::sync::mpsc::Sender<RemoteCommand>,
     cmd_rx: Arc<Mutex<std::sync::mpsc::Receiver<RemoteCommand>>>,
     ws_tx: broadcast::Sender<String>,
@@ -263,23 +264,29 @@ async fn handle_connection(
 }
 
 const HTML_PAGE: &str = r##"<!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#121212">
   <title>BitChord Remote</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-tap-highlight-color: transparent; }
     body {
-      background: linear-gradient(180deg, #181818 0%, #0d0d0d 100%);
+      background: radial-gradient(circle at 50% 20%, #202024 0%, #0d0d0f 100%);
       color: #fff;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       min-height: 100vh;
+      min-height: 100dvh;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: space-between;
       padding: 24px 20px 32px;
+      padding-top: max(24px, env(safe-area-inset-top));
+      padding-bottom: max(32px, env(safe-area-inset-bottom));
       overflow: hidden;
     }
     .header {
@@ -289,7 +296,7 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
       justify-content: space-between;
       align-items: center;
       font-size: 13px;
-      letter-spacing: 1px;
+      letter-spacing: 0.8px;
       text-transform: uppercase;
       color: #a7a7a7;
       font-weight: 600;
@@ -303,6 +310,12 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
       border-radius: 12px;
       color: #1db954;
       font-size: 11px;
+      font-weight: 500;
+      transition: all 0.3s ease;
+    }
+    .badge.offline {
+      color: #f59e0b;
+      background: rgba(245, 158, 11, 0.12);
     }
     .badge-dot {
       width: 7px;
@@ -310,43 +323,52 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
       border-radius: 50%;
       background: #1db954;
       box-shadow: 0 0 8px #1db954;
+      transition: background 0.3s ease;
+    }
+    .badge.offline .badge-dot {
+      background: #f59e0b;
+      box-shadow: 0 0 8px #f59e0b;
     }
     .art-container {
       width: 100%;
       max-width: 320px;
       aspect-ratio: 1/1;
-      margin: 20px 0;
-      border-radius: 12px;
+      margin: 18px 0;
+      border-radius: 14px;
       overflow: hidden;
-      box-shadow: 0 16px 40px rgba(0,0,0,0.6);
-      background: #282828;
+      box-shadow: 0 20px 48px rgba(0,0,0,0.65);
+      background: #242426;
       display: flex;
       align-items: center;
       justify-content: center;
+      position: relative;
     }
     .art-container img {
       width: 100%;
       height: 100%;
       object-fit: cover;
       display: block;
+      transition: opacity 0.25s ease;
     }
     .track-info {
       width: 100%;
       max-width: 360px;
       margin-bottom: 12px;
+      text-align: left;
     }
     .track-title {
-      font-size: 20px;
+      font-size: 21px;
       font-weight: 700;
       color: #fff;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       margin-bottom: 4px;
+      letter-spacing: -0.2px;
     }
     .track-artist {
-      font-size: 14px;
-      color: #b3b3b3;
+      font-size: 14.5px;
+      color: #a0a0a5;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -354,34 +376,35 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
     .scrub-container {
       width: 100%;
       max-width: 360px;
-      margin-bottom: 20px;
+      margin-bottom: 18px;
     }
     .progress-bar-wrap {
       width: 100%;
-      height: 20px;
+      height: 24px;
       display: flex;
       align-items: center;
       cursor: pointer;
     }
     .progress-bg {
       width: 100%;
-      height: 4px;
-      background: rgba(255,255,255,0.2);
-      border-radius: 2px;
+      height: 5px;
+      background: rgba(255,255,255,0.18);
+      border-radius: 3px;
       position: relative;
+      overflow: hidden;
     }
     .progress-fill {
       height: 100%;
       background: #fff;
-      border-radius: 2px;
+      border-radius: 3px;
       width: 0%;
       transition: width 0.1s linear;
     }
     .time-labels {
       display: flex;
       justify-content: space-between;
-      font-size: 11px;
-      color: #b3b3b3;
+      font-size: 11.5px;
+      color: #929298;
       margin-top: 4px;
       font-variant-numeric: tabular-nums;
     }
@@ -391,19 +414,19 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 24px;
+      margin-bottom: 22px;
     }
     .btn {
       background: none;
       border: none;
-      color: #b3b3b3;
+      color: #b3b3b8;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 8px;
+      padding: 10px;
       border-radius: 50%;
-      transition: all 0.15s ease;
+      transition: transform 0.15s cubic-bezier(0.2, 0.8, 0.4, 1), color 0.15s ease;
     }
     .btn:active {
       transform: scale(0.92);
@@ -425,14 +448,17 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
     .btn-play {
       background: #fff;
       color: #000;
-      width: 58px;
-      height: 58px;
+      width: 62px;
+      height: 62px;
       border-radius: 50%;
-      box-shadow: 0 4px 14px rgba(255,255,255,0.25);
+      box-shadow: 0 4px 16px rgba(255,255,255,0.22);
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     .btn-play:active {
       transform: scale(0.94);
-      background: #e0e0e0;
+      background: #ebebeb;
       color: #000;
     }
     .vol-container {
@@ -441,19 +467,20 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
       display: flex;
       align-items: center;
       gap: 12px;
-      color: #b3b3b3;
+      color: #929298;
     }
     .vol-slider {
       flex: 1;
       accent-color: #1db954;
-      height: 4px;
+      height: 5px;
+      cursor: pointer;
     }
   </style>
 </head>
 <body>
   <div class="header">
     <span>BitChord Desktop</span>
-    <div class="badge"><div class="badge-dot"></div>Verbunden</div>
+    <div class="badge" id="conn-badge"><div class="badge-dot" id="conn-dot"></div><span id="conn-text">Connected</span></div>
   </div>
 
   <div class="art-container">
@@ -465,8 +492,8 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
   </div>
 
   <div class="track-info">
-    <div class="track-title" id="title">Kein Titel aktiv</div>
-    <div class="track-artist" id="artist">BitChord Windows</div>
+    <div class="track-title" id="title">No track playing</div>
+    <div class="track-artist" id="artist">BitChord</div>
   </div>
 
   <div class="scrub-container">
@@ -491,22 +518,22 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
         <line x1="4" y1="4" x2="9" y2="9"></line>
       </svg>
     </button>
-    <button class="btn" id="btn-prev" title="Zurück">
+    <button class="btn" id="btn-prev" title="Previous">
       <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor">
         <polygon points="19 20 9 12 19 4 19 20"></polygon>
         <line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="3"></line>
       </svg>
     </button>
-    <button class="btn btn-play" id="btn-play" title="Play/Pause">
-      <svg id="play-icon" width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
-        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+    <button class="btn btn-play" id="btn-play" title="Play / Pause">
+      <svg id="play-icon" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" style="transform: translateX(1.5px);">
+        <polygon points="6 3 20 12 6 21 6 3"></polygon>
       </svg>
       <svg id="pause-icon" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" style="display:none;">
         <rect x="6" y="4" width="4" height="16"></rect>
         <rect x="14" y="4" width="4" height="16"></rect>
       </svg>
     </button>
-    <button class="btn" id="btn-next" title="Weiter">
+    <button class="btn" id="btn-next" title="Next">
       <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor">
         <polygon points="5 4 15 12 5 20 5 4"></polygon>
         <line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="3"></line>
@@ -546,11 +573,16 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       ws = new WebSocket(`${proto}//${location.host}/ws`);
 
+      ws.onopen = () => {
+        document.getElementById('conn-text').textContent = 'Connected';
+        document.getElementById('conn-badge').classList.remove('offline');
+      };
+
       ws.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
           state = data;
-          document.getElementById('title').textContent = data.title || 'Kein Titel';
+          document.getElementById('title').textContent = data.title || 'No track playing';
           document.getElementById('artist').textContent = data.artist || 'BitChord';
 
           const cover = document.getElementById('cover');
@@ -582,7 +614,13 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
       };
 
       ws.onclose = () => {
+        document.getElementById('conn-text').textContent = 'Reconnecting...';
+        document.getElementById('conn-badge').classList.add('offline');
         setTimeout(connect, 1500);
+      };
+
+      ws.onerror = () => {
+        ws.close();
       };
     }
 
@@ -592,7 +630,7 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
       document.getElementById('progress').style.width = pct + '%';
     }
 
-    // Client-side timer to tick position smoothly while playing
+    // Smooth position interpolation while playing
     setInterval(() => {
       if (state.is_playing && !seekHold && state.duration_secs > 0) {
         state.position_secs = Math.min(state.position_secs + 0.5, state.duration_secs);
@@ -600,20 +638,23 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
       }
     }, 500);
 
-    function send(action, val) {
+    function tap(action, val) {
+      if (navigator.vibrate) {
+        try { navigator.vibrate(8); } catch(e){}
+      }
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ action: action, value: val }));
       }
     }
 
-    document.getElementById('btn-play').onclick = () => send('Toggle');
-    document.getElementById('btn-next').onclick = () => send('Next');
-    document.getElementById('btn-prev').onclick = () => send('Prev');
-    document.getElementById('btn-shuffle').onclick = () => send('Shuffle');
-    document.getElementById('btn-repeat').onclick = () => send('Repeat');
+    document.getElementById('btn-play').onclick = () => tap('Toggle');
+    document.getElementById('btn-next').onclick = () => tap('Next');
+    document.getElementById('btn-prev').onclick = () => tap('Prev');
+    document.getElementById('btn-shuffle').onclick = () => tap('Shuffle');
+    document.getElementById('btn-repeat').onclick = () => tap('Repeat');
 
     document.getElementById('vol').oninput = (e) => {
-      send('Volume', parseFloat(e.target.value));
+      tap('Volume', parseFloat(e.target.value));
     };
 
     const scrubber = document.getElementById('scrubber');
@@ -621,7 +662,7 @@ const HTML_PAGE: &str = r##"<!DOCTYPE html>
       const rect = scrubber.getBoundingClientRect();
       const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       const target = frac * (state.duration_secs || 0);
-      send('Seek', target);
+      tap('Seek', target);
       state.position_secs = target;
       updateProgress(target, state.duration_secs);
     };
