@@ -474,6 +474,9 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
             app.actions.push(Action::Go(page));
         }
     }
+
+    // Subtle frosted glass border separating the full-height sidebar from main content and player
+    ui.painter().vline(ui.max_rect().right(), ui.max_rect().y_range(), egui::Stroke::new(1.0, theme::glass(0.08)));
 }
 
 // ------------------------------------------------------------------ top bar
@@ -833,9 +836,11 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
     let full = ui.max_rect();
     let ctx = ui.ctx().clone();
 
-    // Modern solid dark acrylic surface across the entire bottom with top border
-    ui.painter().rect_filled(full, 0.0, theme::panel(0.97));
-    ui.painter().hline(full.x_range(), full.top(), egui::Stroke::new(1.0, theme::glass(0.12)));
+    // Mobile-inspired Frosted Liquid Glass surface across the player bar
+    let glass_surface = Color32::from_rgba_unmultiplied(16, 15, 20, 220);
+    ui.painter().rect_filled(full, 0.0, glass_surface);
+    ui.painter().hline(full.x_range(), full.top(), egui::Stroke::new(1.0, theme::glass(0.14)));
+    ui.painter().vline(full.left(), full.y_range(), egui::Stroke::new(1.0, theme::glass(0.08)));
 
     let status = app.audio.status.clone();
     let hold = app.mix_hold().map(|h| (h.total, h.mix, app.mix_hold_pos(h)));
@@ -850,11 +855,11 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
 
     let pad = 16.0;
     let w = full.width();
-    let compact = w < 680.0;
-    let narrow = w < 920.0;
+    let compact = w < 650.0;
+    let narrow = w < 880.0;
 
-    let left_w = if compact { 150.0 } else if narrow { 220.0 } else { 300.0 };
-    let right_w = if compact { 160.0 } else if narrow { 240.0 } else { 320.0 };
+    let left_w = if compact { 140.0 } else if narrow { 200.0 } else { 260.0 };
+    let right_w = if compact { 150.0 } else if narrow { 220.0 } else { 280.0 };
 
     let left_rect = Rect::from_min_max(pos2(full.left() + pad, full.top()), pos2(full.left() + pad + left_w, full.bottom()));
     let right_rect = Rect::from_min_max(pos2(full.right() - pad - right_w, full.top()), pos2(full.right() - pad, full.bottom()));

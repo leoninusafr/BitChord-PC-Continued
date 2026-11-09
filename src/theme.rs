@@ -16,8 +16,8 @@ const BG_LIGHT: Color32 = Color32::from_rgb(246, 244, 248);
 const TEXT_LIGHT: Color32 = Color32::from_rgb(22, 20, 26);
 const TEXT_DIM_LIGHT: Color32 = Color32::from_rgb(86, 82, 94);
 const TEXT_FAINT_LIGHT: Color32 = Color32::from_rgb(124, 118, 132);
-/// Default accent until a cover provides one (BitChord pink).
-pub const RED: Color32 = Color32::from_rgb(0xFA, 0x58, 0x6A);
+/// Default accent until a cover provides one (BitChord mobile signature coral red #FA2D48).
+pub const RED: Color32 = Color32::from_rgb(0xFA, 0x2D, 0x48);
 
 /// Light or dark, as the app picked it for what's being drawn (see `set_mode`): the
 /// colours below follow it. Now playing always draws dark, over the album art.
@@ -192,24 +192,9 @@ pub fn system_accent() -> Option<Color32> {
 
 #[cfg(windows)]
 fn read_system_accent() -> Option<Color32> {
-    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RegGetValueW};
-    use windows::core::w;
-    // SAFETY: out-buffers sized to what we pass; the strings are static.
-    unsafe {
-        // Eight RGBA swatches, lightest first; the second is "light 2".
-        let mut palette = [0u8; 32];
-        let mut size = palette.len() as u32;
-        let key = w!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent");
-        if RegGetValueW(HKEY_CURRENT_USER, key, w!("AccentPalette"), RRF_RT_REG_BINARY, None, Some(palette.as_mut_ptr() as *mut _), Some(&mut size)).is_ok() && size >= 8 {
-            return Some(Color32::from_rgb(palette[4], palette[5], palette[6]));
-        }
-        // 0xAABBGGRR.
-        let mut abgr = 0u32;
-        let mut size = 4u32;
-        RegGetValueW(HKEY_CURRENT_USER, w!(r"Software\Microsoft\Windows\DWM"), w!("AccentColor"), RRF_RT_REG_DWORD, None, Some(&mut abgr as *mut u32 as *mut _), Some(&mut size))
-            .is_ok()
-            .then(|| Color32::from_rgb(abgr as u8, (abgr >> 8) as u8, (abgr >> 16) as u8))
-    }
+    // Avoid default Windows blue on dark surfaces:
+    // Fallback to BitChord's mobile signature palette (#FA2D48 and #1ED760).
+    None
 }
 
 #[cfg(not(windows))]

@@ -1082,23 +1082,23 @@ impl App {
     fn accent_color(&self) -> Color32 {
         // If current song has sampled album art accent, use it for dynamic cover tinting!
         if self.accent != theme::RED {
-            return self.accent;
+            let c = self.accent;
+            let luma = 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
+            // Prevent dark muddy blue/navy on dark background: lift to electric cyan
+            if c.b() > c.r() + 20 && c.b() > c.g() + 20 && luma < 145.0 {
+                return Color32::from_rgb(56, 189, 248); // #38BDF8 vibrant sky cyan
+            }
+            if luma < 100.0 {
+                return theme::lerp_color(c, Color32::WHITE, 0.40);
+            }
+            return c;
         }
-        let c = self.look().accent(self.accent);
-        if theme::light() {
-            let luma = 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
-            if luma > 150.0 {
-                return theme::lerp_color(c, Color32::BLACK, ((luma - 150.0) / 105.0 * 0.45).min(0.45));
-            }
-            c
+
+        // Default: match mobile app (Spotify Green #1ED760 on Library/Spotify, else mobile signature #FA2D48)
+        if matches!(self.page, Page::Library(_)) || self.spotify_selected.is_some() {
+            Color32::from_rgb(30, 215, 96) // #1ED760 Vibrant Spotify Green
         } else {
-            // Dark mode: if accent is Windows system blue or too dark (< 130 luma), use vibrant Spotify Green
-            let luma = 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
-            if self.look().accent == "system" || luma < 130.0 {
-                Color32::from_rgb(30, 215, 96) // #1ED760 Vibrant Spotify Green
-            } else {
-                c
-            }
+            theme::RED // #FA2D48 BitChord Mobile Signature Coral Red
         }
     }
 
@@ -1366,26 +1366,20 @@ impl eframe::App for App {
             // The top of the window, down to the search box's row: what's on it comes after.
             titlebar::drag_area(ui, egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), titlebar::HEIGHT)), "main");
         }
-        if !self.fullscreen {
-            // Full-width modern bottom player bar across the entire window (Spotify / Apple Music style)
-            egui::Panel::bottom("player").resizable(false)
-                .exact_size(self.bar_height())
-                .frame(egui::Frame::new())
-                .show_separator_line(false)
-                .show(ui, |ui| shell::player_bar(self, ui, now, false));
-        }
         if !self.fullscreen && !covered {
+            // The sidebar first, so it runs the window's full height down to the bottom:
+            // The library on the left runs continuously down past the player bar.
             use crate::preset::SidebarStyle;
             let side_alpha = app_style.sidebar_alpha.clamp(0.0, 1.0);
             // The logo's row is 32 points tall.
             let side_margin = egui::Margin { left: 14, right: 14, top: titlebar::top_margin(16, 32.0), bottom: 16 };
             let side_frame = match app_style.sidebar {
-                SidebarStyle::Glass => egui::Frame::new().fill(theme::panel(side_alpha)).inner_margin(side_margin),
+                SidebarStyle::Glass => egui::Frame::new().fill(theme::panel(side_alpha.max(0.35))).inner_margin(side_margin),
                 SidebarStyle::Transparent => egui::Frame::new().inner_margin(side_margin),
                 SidebarStyle::Solid => egui::Frame::new().fill(look.solid()).inner_margin(side_margin),
                 SidebarStyle::Floating => egui::Frame::new()
-                    .fill(theme::panel(side_alpha.max(0.3)))
-                    .stroke(egui::Stroke::new(1.0, theme::glass(0.08)))
+                    .fill(theme::panel(side_alpha.max(0.35)))
+                    .stroke(egui::Stroke::new(1.0, theme::glass(0.10)))
                     .corner_radius(egui::CornerRadius::same(theme::panel_radius().max(12)))
                     .outer_margin(egui::Margin { left: 10, right: 4, top: 10, bottom: 10 })
                     .inner_margin(egui::Margin::symmetric(12, 14)),
@@ -1395,6 +1389,16 @@ impl eframe::App for App {
                 .frame(side_frame)
                 .show_separator_line(false)
                 .show(ui, |ui| shell::sidebar(self, ui));
+        }
+        if !self.fullscreen {
+            // Liquid Frosted Glass bottom player bar spanning the main content area (from sidebar to right edge)
+            egui::Panel::bottom("player").resizable(false)
+                .exact_size(self.bar_height())
+                .frame(egui::Frame::new())
+                .show_separator_line(false)
+                .show(ui, |ui| shell::player_bar(self, ui, now, true));
+        }
+        if !self.fullscreen && !covered {
             let q = theme::anim_bool(&ctx, "queue-drawer", self.queue_open && !self.np_open, 0.25);
             if q > 0.01 {
                 egui::Panel::right("queue").resizable(false)
