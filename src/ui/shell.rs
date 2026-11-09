@@ -427,7 +427,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 }
 
                 if a > 0.0 {
-                    let right_pad = if is_active { 34.0 } else { 8.0 };
+                    let right_pad = if is_active { 36.0 } else { 20.0 };
                     let max_w = (rect.right() - (img.right() + 10.0) - right_pad).max(10.0);
                     let title_col = if is_active {
                         accent
@@ -513,7 +513,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
 
                 if a > 0.0 {
                     let tx = art_rect.right() + 10.0;
-                    let title_w = (rect.right() - tx - 8.0).max(10.0);
+                    let title_w = (rect.right() - tx - 20.0).max(10.0);
                     let title_col = if is_sp_selected { accent } else { theme::text() };
                     let title_g = widgets::galley(ui, &sp.name, theme::semibold(13.0), title_col, title_w);
                     ui.painter().galley(pos2(tx, rect.center().y - 12.0), title_g, title_col);

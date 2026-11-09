@@ -681,14 +681,18 @@ fn card_menu_contents(ui: &mut Ui, c: &Card, liked: bool, acts: &mut Vec<Action>
     }
 }
 
-fn more_button(ui: &mut Ui, rect: Rect, id: egui::Id, label: &str) -> Response {
+fn more_button(ui: &mut Ui, rect: Rect, id: egui::Id, label: &str, alpha: f32) -> Response {
     let response = named(ui.interact(rect, id, Sense::click()), label)
         .on_hover_cursor(egui::CursorIcon::PointingHand);
-    if response.hovered() || egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&response)) {
-        ui.painter().rect_filled(rect, 7.0, theme::glass(0.16));
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&response));
+    let a = if open { 1.0 } else { alpha };
+    if a > 0.01 {
+        if response.hovered() || open {
+            ui.painter().rect_filled(rect, 7.0, theme::glass(0.16 * a));
+        }
+        let color = if response.hovered() { theme::text() } else { theme::text_dim() };
+        icon_at(ui, rect.center(), icon::ELLIPSIS_VERTICAL, 18.0, theme::with_alpha(color, a));
     }
-    let color = if response.hovered() { theme::text() } else { theme::text_dim() };
-    icon_at(ui, rect.center(), icon::ELLIPSIS_VERTICAL, 18.0, color);
     response
 }
 
@@ -1009,9 +1013,11 @@ pub fn track_row(ui: &mut Ui, t: &Track, o: &RowOpts, acts: &mut Vec<Action>) ->
         }
         x += 54.0;
     }
-    let right = rect.right() - 51.0;
-    let dur_w = 52.0;
-    let avail = right - dur_w - x;
+    let has_dur = t.duration.is_some();
+    let dur_right = rect.right() - 36.0;
+    let dur_w = if has_dur { 46.0 } else { 0.0 };
+    let text_right = if has_dur { dur_right - dur_w - 6.0 } else { dur_right };
+    let avail = (text_right - x).max(10.0);
     let wide = avail > 520.0;
     // Album rows (numbered) are just song name and plays; other rows are
     // title + artists, then album, then plays when there's room.
@@ -1044,7 +1050,7 @@ pub fn track_row(ui: &mut Ui, t: &Track, o: &RowOpts, acts: &mut Vec<Action>) ->
         ui.painter().text(pos2(px, cy), Align2::LEFT_CENTER, p, theme::regular(13.5), theme::text_dim());
     }
     if let (Some(ax), Some(album)) = (album_x, &t.album) {
-        let w = plays_x.unwrap_or(right - dur_w) - ax - 10.0;
+        let w = plays_x.unwrap_or(text_right) - ax - 10.0;
         let g = galley(ui, &album.name, theme::regular(13.5), theme::text_dim(), w);
         let ar = Rect::from_min_size(pos2(ax, cy - 9.0), g.size());
         ui.painter().galley(ar.min, g, theme::text_dim());
@@ -1061,10 +1067,10 @@ pub fn track_row(ui: &mut Ui, t: &Track, o: &RowOpts, acts: &mut Vec<Action>) ->
         }
     }
     if let Some(d) = t.duration {
-        ui.painter().text(pos2(right, cy), Align2::RIGHT_CENTER, super::fmt_time(d), theme::regular(13.0), theme::text_dim());
+        ui.painter().text(pos2(dur_right, cy), Align2::RIGHT_CENTER, super::fmt_time(d), theme::regular(13.0), theme::text_dim());
     }
-    let more_rect = Rect::from_center_size(pos2(rect.right() - 20.0, cy), Vec2::splat(30.0));
-    let more = more_button(ui, more_rect, base.id.with("more"), "Song options");
+    let more_rect = Rect::from_center_size(pos2(rect.right() - 18.0, cy), Vec2::splat(28.0));
+    let more = more_button(ui, more_rect, base.id.with("more"), "Song options", h);
     egui::Popup::menu(&more).show(|ui| song_menu(ui, t, o.liked, o.remove, o.queue_remove, acts));
     // Right-click anywhere on the row opens the same menu.
     egui::Popup::context_menu(&resp).show(|ui| song_menu(ui, t, o.liked, o.remove, o.queue_remove, acts));

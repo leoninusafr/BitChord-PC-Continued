@@ -681,7 +681,42 @@ Die Extension von **TechShivvy** und **Hitesh1090** nutzt einen genialen Mechani
   - **Gesten-Unterbrechbarkeit (Interruptibility)**:
     - Wenn eine Pfeil-Animation läuft und der Nutzer die Leiste mit der Maus greift, bricht der automatische Glide sofort ab und folgt 1:1 dem Cursor.
     - Pfeile und Wischen harmonieren perfekt: Nach einem Drag snappt ein Klick auf die Pfeile ausgehend von der aktuellen Position nahtlos zur nächsten vollen Ansicht.
-- **Status**: Vollständig umgesetzt in `src/ui/widgets.rs`.
+### Step 42: Titelbreite & Spacing-Harmonisierung (Hauptseite Quick Picks & Sidebar Scrollbar-Abstand)
+
+- **Problem & Ursachenanalyse**:
+  1. **Hauptseite (Songzeilen / Quick picks)**:
+     - Bisher wurden in `track_row` pauschal über 103 Pixel am rechten Rand abgezogen (`right = rect.right() - 51.0` und `dur_w = 52.0`), selbst wenn der Song gar keine Zeitangabe hatte (`t.duration == None`).
+     - Dadurch wurden Songtitel in den 270 px breiten Spalten künstlich auf nur ~110 px eingeengt und brachen extrem früh mit `...` ab, gefolgt von einer riesigen leeren Lücke von fast 70 px bis zum Drei-Punkte-Menü.
+  2. **Linke Seitenleiste (Playlists)**:
+     - Das Padding am rechten Rand (`right_pad`) betrug nur 8 px. Lange Playlist-Namen liefen bis direkt an die vertikale Scrollbar heran, sodass die Auslassungspunkte `...` optisch fast die Scrollbar berührten.
+- **Umsetzung & Lösungen**:
+  - **Dynamische Breitenberechnung auf der Hauptseite**:
+    - Wenn keine Songdauer vorliegt (`t.duration == None`), nutzt der Titel den gesamten verfügbaren Platz bis kurz vor das Drei-Punkte-Menü (`rect.right() - 36.0`).
+    - **Ergebnis**: Über **65 Pixel mehr Platz** für Songtitel (+63 % Textbreite) auf der Home-Seite! Keine unruhigen Leerflächen mehr.
+  - **Subtiles Hover-Einblenden des Drei-Punkte-Menüs**:
+    - Das Menü-Icon (`icon::ELLIPSIS_VERTICAL`) blendet sich dezent per Alpha-Easing ein, sobald man über die Songzeile hovert (oder das Menü geöffnet ist), wodurch die Hauptseite ruhig und aufgeräumt wirkt.
+  - **20 px Sicherheitsabstand in der Seitenleiste**:
+    - `right_pad` für Playlist-Einträge von 8 px auf saubere 20 px (bzw. 36 px bei aktiver Wiedergabe mit Lautsprecher-Icon) vergrößert.
+    - Die Auslassungspunkte `...` halten stets einen eleganten Abstand zur Scrollbar.
+### Step 43: Scrollbar-Springen auf der Startseite & Seitenwechsel-Bounce ("Von oben runter")
+
+- **1. Scrollbar springt nach rechts und links beim Scrollen auf der Startseite**:
+  - **Beobachtung**: Beim Herunterscrollen auf der Startseite verschwindet die Scrollbar manchmal kurz oder springt um ein paar Pixel nach rechts und wieder zurück.
+  - **Technische Ursache**:
+    - In `src/ui/pages.rs:55` addiert `ui.spacing_mut().scroll.bar_outer_margin += super::titlebar::edge_inset();` einen Offset.
+    - Gleichzeitig triggert beim Scrollen das Infinite-Loading (`HomeMore`), wodurch dynamisch Shelves nachgeladen werden.
+    - Egui schaltet bei `VisibleWhenNeeded` die Scrollbar ein/aus und berechnet das Layout neu, wenn Inhalte über den Fensterrand wachsen, was zum sichtbaren Hin- und Herspringen der Scrollleiste führt.
+  - **Lösungsidee für später**: Feste, stabile Scrollbar-Verankerung (`ScrollBarVisibility::AlwaysVisible` oder fester `bar_outer_margin`), damit die Position absolut ruhig und fest an derselben Pixelkoordinate verankert bleibt.
+- **2. Vertikaler Seitenwechsel-Bounce ("Bounced immer so von oben runter")**:
+  - **Beobachtung**: Wenn man mit der Maus (Vor-/Zurück-Tasten) oder den Pfeilen oben links zwischen Seiten navigiert, hüpft/bounced die gesamte Seite jedes Mal von oben nach unten.
+  - **Technische Ursache**:
+    - In `src/ui/pages.rs:62` ist ein festes `ui.add_space(18.0 * (1.0 - t));` verbaut.
+    - Bei jedem Seitenwechsel (`page_changed`) wird die gesamte Seite um 18 Pixel nach unten gedrückt und fährt dann in 320 ms nach oben.
+  - **Überlegungen & Optionen zur Verbesserung**:
+    - *Option A (Sanfter Fade)*: Reiner weicher Opacity-Crossfade (`ui.set_opacity(t)`), ohne jede vertikale Höhenverschiebung (ruhiger, cleaner Desktop-Look wie Apple Music).
+    - *Option B (Direktionaler Slide)*: Spotify-Style: Zurück gleitet von links nach rechts, Vorwärts von rechts nach links.
+    - *Option C (Sofort)*: Komplett ohne künstliche Verzögerung direkt gerendert.
+- **Status**: Vorerst nur dokumentiert und im Plan notiert, noch nichts verändert.
 
 ---
 
