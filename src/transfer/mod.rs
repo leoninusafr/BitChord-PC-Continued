@@ -418,6 +418,21 @@ impl Transfer {
         });
     }
 
+    /// Two-way sync: likes or unlikes track in Spotify if user is connected to Spotify.
+    pub async fn sync_like_to_spotify(&self, title: &str, artist: &str, like: bool) {
+        let cookie = self.cookie();
+        if let Ok(client) = spotify::Client::connect(cookie.as_deref(), &self.data_dir).await {
+            let _ = client.sync_like(title, artist, like).await;
+        }
+    }
+
+    /// Refresh Spotify library in the background.
+    pub fn refresh_spotify_library(self: &Arc<Self>, rt: &crate::backend::Backend) {
+        if matches!(*self.account.lock().unwrap(), Account::SignedIn { .. }) {
+            self.load_account(rt);
+        }
+    }
+
     pub fn set_paused(&self, paused: bool) {
         if let Some(j) = self.job.lock().unwrap().as_mut() {
             j.paused = paused;

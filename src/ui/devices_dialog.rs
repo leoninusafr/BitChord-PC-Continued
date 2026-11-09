@@ -15,7 +15,7 @@ pub fn devices_dialog(app: &mut App, ctx: &egui::Context) {
 
     let screen = ctx.content_rect();
     // Backdrop overlay
-    egui::Area::new(egui::Id::unique("devices-modal-backdrop"))
+    egui::Area::new(egui::Id::new("devices-modal-backdrop"))
         .order(egui::Order::Foreground)
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
@@ -30,7 +30,7 @@ pub fn devices_dialog(app: &mut App, ctx: &egui::Context) {
     let h = 540.0f32.min(screen.height() - 40.0);
     let modal_rect = Rect::from_center_size(screen.center(), vec2(w, h));
 
-    egui::Area::new(egui::Id::unique("devices-modal-window"))
+    egui::Area::new(egui::Id::new("devices-modal-window"))
         .order(egui::Order::Tooltip)
         .fixed_pos(modal_rect.min)
         .show(ctx, |ui| {
@@ -106,29 +106,26 @@ pub fn devices_dialog(app: &mut App, ctx: &egui::Context) {
                             "http://127.0.0.1:8420".to_string()
                         };
 
-                        // Real PNG QR Code rendering (Strictly NO text/ASCII QR)
-                        let qr_bytes = if let Some(srv) = &app.remote_server {
-                            srv.qr_png()
-                        } else {
-                            crate::remote::generate_qr_png_bytes(&url)
-                        };
+                        if app.remote_qr.is_none() {
+                            let png_bytes = if let Some(srv) = &app.remote_server {
+                                srv.qr_png()
+                            } else {
+                                crate::remote::generate_qr_png_bytes(&url)
+                            };
+                            if let Some(png) = png_bytes {
+                                if let Ok(img) = image::load_from_memory(png.as_slice()) {
+                                    let img = img.into_rgba8();
+                                    let ci = egui::ColorImage::from_rgba_unmultiplied(
+                                        [img.width() as usize, img.height() as usize],
+                                        img.as_raw(),
+                                    );
+                                    app.remote_qr = Some(ctx.load_texture("remote-qr", ci, egui::TextureOptions::LINEAR));
+                                }
+                            }
+                        }
 
                         ui.horizontal(|ui| {
-                            if let Some(png) = qr_bytes.as_ref() {
-                                let key = egui::Id::unique(("remote-qr-tex", &url));
-                                let tex = ui.ctx().data_mut(|d| {
-                                    d.get_temp::<egui::TextureHandle>(key).unwrap_or_else(|| {
-                                        let img = image::load_from_memory(png.as_slice()).unwrap().into_rgba8();
-                                        let ci = egui::ColorImage::from_rgba_unmultiplied(
-                                            [img.width() as usize, img.height() as usize],
-                                            img.as_raw(),
-                                        );
-                                        let t = ui.ctx().load_texture("remote-qr", ci, egui::TextureOptions::LINEAR);
-                                        d.insert_temp(key, t.clone());
-                                        t
-                                    })
-                                });
-
+                            if let Some(tex) = &app.remote_qr {
                                 let (img_rect, _) = ui.allocate_exact_size(vec2(130.0, 130.0), Sense::hover());
                                 ui.painter().rect_filled(img_rect, 8.0, Color32::WHITE);
                                 ui.painter().image(tex.id(), img_rect.shrink(4.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);

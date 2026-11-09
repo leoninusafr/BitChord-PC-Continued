@@ -51,7 +51,8 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
             // 2. Title, Artists & Favorite Heart
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    ui.add_sized([width - 44.0, 22.0], egui::Label::new(
+                    ui.set_max_width((width - 44.0).max(10.0));
+                    ui.add_sized([(width - 44.0).max(10.0), 22.0], egui::Label::new(
                         egui::RichText::new(&t.title).font(theme::bold(18.0)).color(theme::text())
                     ).truncate());
 
@@ -71,8 +72,7 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
 
                 // Favorite Heart Button
                 let liked = app.liked.contains(&t.id);
-                let btn_r = Rect::from_center_size(pos2(cover_rect.right() - 16.0, ui.cursor().top() - 16.0), Vec2::splat(28.0));
-                let hresp = ui.interact(btn_r, ui.scope_id().with("details-like"), Sense::click());
+                let (btn_r, hresp) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
                 let hresp = named(hresp, if liked { "Aus Favoriten entfernen" } else { "Zu Favoriten hinzufügen" })
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                 let pop = theme::anim_bool(ui.ctx(), ("liked", &t.id), liked, 0.25);

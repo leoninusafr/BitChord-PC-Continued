@@ -279,6 +279,31 @@ impl Client {
         Ok(items.iter().filter_map(|i| library_entry(&i["item"])).collect())
     }
 
+    /// Two-way like synchronization with Spotify: search track and like/unlike in Spotify library.
+    pub async fn sync_like(&self, title: &str, artist: &str, like: bool) -> Result<()> {
+        let q = if artist.is_empty() {
+            title.to_owned()
+        } else {
+            format!("track:{} artist:{}", title, artist)
+        };
+        let search_url = "https://api.spotify.com/v1/search";
+        let res: Value = self.http.get(search_url)
+            .bearer_auth(&self.access_token)
+            .query(&[("q", &q), ("type", &"track".to_string()), ("limit", &"1".to_string())])
+            .send().await?
+            .error_for_status()?.json().await?;
+        if let Some(id) = res["tracks"]["items"][0]["id"].as_str() {
+            let track_url = format!("https://api.spotify.com/v1/me/tracks?ids={}", id);
+            let req = if like {
+                self.http.put(&track_url)
+            } else {
+                self.http.delete(&track_url)
+            };
+            let _ = req.bearer_auth(&self.access_token).send().await;
+        }
+        Ok(())
+    }
+
     async fn page(&self, id: &str, offset: usize, limit: usize) -> Result<Value> {
         let variables = json!({"uri": format!("spotify:playlist:{id}"), "offset": offset, "limit": limit, "enableWatchFeedEntrypoint": false});
         let body = self.query("fetchPlaylist", variables).await?;

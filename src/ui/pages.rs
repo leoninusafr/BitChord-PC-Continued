@@ -966,7 +966,6 @@ fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
         for (t, label) in [
             (LibTab::Playlists, "Playlists"),
             (LibTab::Songs, "Liked songs"),
-            (LibTab::Spotify, "Spotify Sync"),
             (LibTab::Albums, "Albums"),
             (LibTab::History, "History"),
             (LibTab::Uploads, "Uploads"),
@@ -1057,6 +1056,26 @@ fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
         }
         LibTab::Spotify => spotify_sync_tab(app, ui, now),
         _ => {
+            let loaded = app.spotify_loaded_playlist.lock().unwrap().take();
+            if let Some((src, res)) = loaded {
+                if let Some((entry, playlist, loading)) = &mut app.spotify_selected {
+                    if entry.source == src {
+                        *loading = false;
+                        match res {
+                            Ok(p) => *playlist = Some(p),
+                            Err(e) => {
+                                app.toast(format!("Fehler beim Laden von Spotify: {e}"));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if app.spotify_selected.is_some() {
+                spotify_sync_tab(app, ui, now);
+                return;
+            }
+
             if app.library.is_none() {
                 placeholder(app, ui, now, 2, CARD);
                 return;
@@ -1064,11 +1083,73 @@ fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
             let Some(lib) = &app.library else { return };
             match tab {
                 LibTab::Playlists => {
-                    if pill(ui, "New playlist", None, false).clicked() {
-                        app.actions.push(Action::NewPlaylist(Vec::new()));
-                    }
+                    let ytm_playlists = &lib.playlists;
+
+                    // Spotify playlists
+                    app.transfer.ensure_account(&app.backend);
+                    let spotify_playlists: Vec<crate::transfer::spotify::Entry> = {
+                        let acc = app.transfer.account.lock().unwrap();
+                        if let crate::transfer::Account::SignedIn { library, .. } = &*acc {
+                            library.iter().filter(|e| !matches!(e.source, crate::transfer::spotify::Source::Liked)).cloned().collect()
+                        } else {
+                            Vec::new()
+                        }
+                    };
+
+                    let filter_id = egui::Id::new("lib-pl-filter");
+                    let mut filter = ui.data(|d| d.get_temp::<u8>(filter_id).unwrap_or(0));
+
+                    ui.horizontal(|ui| {
+                        if pill(ui, "Neue Playlist", None, false).clicked() {
+                            app.actions.push(Action::NewPlaylist(Vec::new()));
+                        }
+                        ui.add_space(14.0);
+
+                        for (idx, label) in [(0, "Alle Playlists"), (1, "YouTube Music"), (2, "Spotify")] {
+                            if chip(ui, label, filter == idx).clicked() {
+                                filter = idx;
+                                ui.data_mut(|d| d.insert_temp(filter_id, filter));
+                            }
+                        }
+                    });
                     ui.add_space(14.0);
-                    grid(ui, &lib.playlists, &mut app.actions)
+
+                    // Deduplicated Spotify playlists: exclude playlists where a YTM playlist with the exact same name already exists!
+                    let dedup_spotify: Vec<&crate::transfer::spotify::Entry> = spotify_playlists
+                        .iter()
+                        .filter(|sp| !ytm_playlists.iter().any(|yp| yp.title.trim().eq_ignore_ascii_case(sp.name.trim())))
+                        .collect();
+
+                    let mut clicked_spotify: Option<crate::transfer::spotify::Entry> = None;
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(20.0, 22.0);
+
+                        // 1. YouTube Music playlists (if filter == 0 or filter == 1)
+                        if filter != 2 {
+                            for c in ytm_playlists {
+                                card(ui, c, CARD, false, &mut app.actions);
+                            }
+                        }
+
+                        // 2. Spotify playlists (if filter == 0 or filter == 2)
+                        if filter != 1 {
+                            let list: Vec<&crate::transfer::spotify::Entry> = if filter == 0 { dedup_spotify } else { spotify_playlists.iter().collect() };
+                            for pl in list {
+                                render_spotify_card(ui, pl, &mut clicked_spotify);
+                            }
+                        }
+                    });
+
+                    if let Some(pl) = clicked_spotify {
+                        app.spotify_selected = Some((pl.clone(), None, true));
+                        let xfer = app.transfer.clone();
+                        let b = app.backend.clone();
+                        let slot = app.spotify_loaded_playlist.clone();
+                        let src = pl.source.clone();
+                        xfer.fetch_spotify_playlist(&b, src.clone(), move |res| {
+                            *slot.lock().unwrap() = Some((src, res));
+                        });
+                    }
                 }
                 LibTab::Albums => grid(ui, &lib.albums, &mut app.actions),
                 LibTab::Songs | LibTab::Spotify | LibTab::History | LibTab::Uploads => unreachable!(),
@@ -1338,11 +1419,13 @@ fn spotify_sync_tab(app: &mut App, ui: &mut Ui, _now: f64) {
                             widgets::icon_at(ui, play_circle.center(), icon::PLAY, 14.0, Color32::from_rgb(11, 11, 11));
                         }
 
-                        // Title & Subtitle
+                        // Title & Subtitle (properly truncated with ellipsis inside card boundaries)
                         let t_y = art_r.bottom() + 10.0;
-                        ui.painter().text(pos2(c_inner.left(), t_y), egui::Align2::LEFT_TOP, &pl.name, theme::semibold(13.5), theme::text());
+                        let name_g = widgets::galley(ui, &pl.name, theme::semibold(13.5), theme::text(), c_inner.width());
+                        ui.painter().galley(pos2(c_inner.left(), t_y), name_g, Color32::WHITE);
                         let sub = pl.count.map_or_else(|| pl.owner.clone(), |c| format!("{c} Songs"));
-                        ui.painter().text(pos2(c_inner.left(), t_y + 18.0), egui::Align2::LEFT_TOP, &sub, theme::regular(11.5), theme::text_dim());
+                        let sub_g = widgets::galley(ui, &sub, theme::regular(11.5), theme::text_dim(), c_inner.width());
+                        ui.painter().galley(pos2(c_inner.left(), t_y + 18.0), sub_g, Color32::WHITE);
 
                         if cresp.clicked() {
                             app.spotify_selected = Some((pl.clone(), None, true));
@@ -1380,6 +1463,40 @@ fn spotify_sync_tab(app: &mut App, ui: &mut Ui, _now: f64) {
                 }
             });
         }
+    }
+}
+
+fn render_spotify_card(ui: &mut Ui, pl: &crate::transfer::spotify::Entry, clicked: &mut Option<crate::transfer::spotify::Entry>) {
+    let card_w = CARD;
+    let card_h = CARD + 48.0;
+    let (cr, cresp) = ui.allocate_exact_size(vec2(card_w, card_h), Sense::click());
+    let cresp = cresp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let ch = theme::anim_bool(ui.ctx(), cresp.id.with("ch"), cresp.hovered(), 0.12);
+    ui.painter().rect_filled(cr, 10.0, theme::glass(0.04 + 0.05 * ch));
+    ui.painter().rect_stroke(cr, 10.0, egui::Stroke::new(1.0, theme::glass(0.08 + 0.08 * ch)), egui::StrokeKind::Inside);
+
+    let c_inner = cr.shrink(10.0);
+    let art_size = c_inner.width();
+    let art_r = Rect::from_min_size(c_inner.min, vec2(art_size, art_size));
+    paint_cover(ui, art_r, &super::transfer::spotify_thumbs(&pl.art), 8.0, 1.0);
+
+    // Overlay play button on hover
+    if ch > 0.0 {
+        let play_circle = Rect::from_center_size(pos2(art_r.right() - 20.0, art_r.bottom() - 20.0), Vec2::splat(32.0));
+        ui.painter().circle_filled(play_circle.center(), 16.0, super::transfer::SPOTIFY);
+        widgets::icon_at(ui, play_circle.center(), icon::PLAY, 14.0, Color32::from_rgb(11, 11, 11));
+    }
+
+    // Title & Subtitle (properly truncated with ellipsis inside card boundaries)
+    let t_y = art_r.bottom() + 10.0;
+    let name_g = widgets::galley(ui, &pl.name, theme::semibold(13.5), theme::text(), c_inner.width());
+    ui.painter().galley(pos2(c_inner.left(), t_y), name_g, Color32::WHITE);
+    let sub = pl.count.map_or_else(|| "Spotify Playlist".to_string(), |c| format!("Spotify · {c} Songs"));
+    let sub_g = widgets::galley(ui, &sub, theme::regular(11.5), theme::text_dim(), c_inner.width());
+    ui.painter().galley(pos2(c_inner.left(), t_y + 18.0), sub_g, Color32::WHITE);
+
+    if cresp.clicked() {
+        *clicked = Some(pl.clone());
     }
 }
 

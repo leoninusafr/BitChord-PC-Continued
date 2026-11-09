@@ -473,6 +473,7 @@ pub struct App {
     pub details_open: bool,
     pub devices_open: bool,
     pub remote_server: Option<crate::remote::RemoteServer>,
+    pub remote_qr: Option<egui::TextureHandle>,
     fullscreen: bool,
     /// The mini player: the window shrunk to a strip.
     mini: mini::Mini,
@@ -772,6 +773,7 @@ impl App {
             details_open: false,
             devices_open: false,
             remote_server: Some(crate::remote::RemoteServer::new()),
+            remote_qr: None,
             fullscreen: false,
             mini: mini::Mini::load(get),
             lyrics: None,
@@ -1078,15 +1080,26 @@ impl App {
     }
 
     fn accent_color(&self) -> Color32 {
+        // If current song has sampled album art accent, use it for dynamic cover tinting!
+        if self.accent != theme::RED {
+            return self.accent;
+        }
         let c = self.look().accent(self.accent);
         if theme::light() {
-            // A pale cover colour would barely show on light pages: deepen it.
             let luma = 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
             if luma > 150.0 {
                 return theme::lerp_color(c, Color32::BLACK, ((luma - 150.0) / 105.0 * 0.45).min(0.45));
             }
+            c
+        } else {
+            // Dark mode: if accent is Windows system blue or too dark (< 130 luma), use vibrant Spotify Green
+            let luma = 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
+            if self.look().accent == "system" || luma < 130.0 {
+                Color32::from_rgb(30, 215, 96) // #1ED760 Vibrant Spotify Green
+            } else {
+                c
+            }
         }
-        c
     }
 
     /// Whether pages draw light: only the ytm-rs theme has a light mode, and it follows

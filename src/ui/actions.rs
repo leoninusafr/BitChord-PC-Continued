@@ -46,7 +46,12 @@ impl App {
             Action::TogglePlay => self.toggle(),
             Action::ShuffleToggle => self.toggle_shuffle(),
             Action::PlayRandomSong => self.play_random_song(),
-            Action::ToggleDetails => self.details_open = !self.details_open,
+            Action::ToggleDetails => {
+                self.details_open = !self.details_open;
+                if self.details_open {
+                    self.queue_open = false;
+                }
+            }
             Action::ToggleDevices => self.devices_open = !self.devices_open,
             Action::PlaySpotify(t) => {
                 let cache_key = format!("{} - {}", t.name.to_lowercase(), t.artists.join(", ").to_lowercase());
@@ -192,7 +197,15 @@ impl App {
                 }
                 // Optimistic: update the like state and the cached Liked songs list now.
                 self.set_liked(std::slice::from_ref(&t), like);
-                self.backend.request(Req::Like { video_id: t.id, like });
+                self.backend.request(Req::Like { video_id: t.id.clone(), like });
+
+                // Also sync like/unlike to Spotify in the background if connected!
+                let xfer = self.transfer.clone();
+                let title = t.title.clone();
+                let artist = t.artists.first().map(|a| a.name.clone()).unwrap_or_default();
+                self.backend.spawn(async move {
+                    xfer.sync_like_to_spotify(&title, &artist, like).await;
+                });
             }
             Action::LikeMany(tracks, like) => {
                 if !self.logged_in {

@@ -711,22 +711,21 @@ fn room(app: &mut App, ui: &mut Ui) {
                 ui.data_mut(|d| d.insert_temp(qr_id, show_qr));
             }
             if show_qr {
-                ui.add_space(10.0);
-                if let Some(png) = crate::remote::generate_qr_png_bytes(&jam_link) {
-                    let key = egui::Id::unique(("jam-qr-tex", &code));
-                    let tex = ui.ctx().data_mut(|d| {
-                        d.get_temp::<egui::TextureHandle>(key).unwrap_or_else(|| {
-                            let img = image::load_from_memory(png.as_slice()).unwrap().into_rgba8();
-                            let ci = egui::ColorImage::from_rgba_unmultiplied(
-                                [img.width() as usize, img.height() as usize],
-                                img.as_raw(),
-                            );
-                            let t = ui.ctx().load_texture("jam-qr", ci, egui::TextureOptions::LINEAR);
-                            d.insert_temp(key, t.clone());
-                            t
-                        })
-                    });
-                    ui.horizontal(|ui| {
+                let key = egui::Id::new(("jam-qr-tex", &code));
+                let tex = ui.ctx().data_mut(|d| {
+                    d.get_temp::<egui::TextureHandle>(key).unwrap_or_else(|| {
+                        let png = crate::remote::generate_qr_png_bytes(&jam_link).unwrap_or_default();
+                        let img = image::load_from_memory(png.as_slice()).map(|i| i.into_rgba8()).unwrap_or_default();
+                        let ci = egui::ColorImage::from_rgba_unmultiplied(
+                            [img.width() as usize, img.height() as usize],
+                            img.as_raw(),
+                        );
+                        let t = ui.ctx().load_texture("jam-qr", ci, egui::TextureOptions::LINEAR);
+                        d.insert_temp(key, t.clone());
+                        t
+                    })
+                });
+                ui.horizontal(|ui| {
                         let (img_rect, _) = ui.allocate_exact_size(vec2(130.0, 130.0), Sense::hover());
                         ui.painter().rect_filled(img_rect, 8.0, Color32::WHITE);
                         ui.painter().image(tex.id(), img_rect.shrink(6.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -745,7 +744,6 @@ fn room(app: &mut App, ui: &mut Ui) {
                     });
                 }
             }
-        }
         ui.add_space(16.0);
     });
 

@@ -237,7 +237,6 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
     const LUCIDE: f32 = glyphs::LUCIDE_GLYPH;
     nav(ui, glyphs::LIBRARY, APPLE, "Bibliothek", Page::Library(LibTab::Playlists), matches!(p, Page::Library(LibTab::Playlists)), &mut go_to);
     nav(ui, glyphs::HEART, APPLE, "Lieblingssongs", Page::Library(LibTab::Songs), matches!(p, Page::Library(LibTab::Songs)), &mut go_to);
-    nav(ui, glyphs::SPARKLES, APPLE, "Spotify Sync", Page::Library(LibTab::Spotify), matches!(p, Page::Library(LibTab::Spotify)), &mut go_to);
     nav(ui, glyphs::DOWNLOAD, APPLE, "Downloads", Page::Downloads, p == Page::Downloads, &mut go_to);
 
     ui.add_space(14.0);
@@ -366,8 +365,66 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                     app.actions.push(Action::Open(c.target.clone()));
                 }
             }
+
+            // Spotify playlists in sidebar (deduplicated against YouTube Music playlists)
+            let spotify_sidebar: Vec<crate::transfer::spotify::Entry> = {
+                let acc = app.transfer.account.lock().unwrap();
+                if let crate::transfer::Account::SignedIn { library, .. } = &*acc {
+                    library.iter()
+                        .filter(|e| !matches!(e.source, crate::transfer::spotify::Source::Liked))
+                        .filter(|e| !visible.iter().any(|c| c.title.trim().eq_ignore_ascii_case(e.name.trim())))
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            };
+
+            let mut clicked_sp: Option<crate::transfer::spotify::Entry> = None;
+            for sp in &spotify_sidebar {
+                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 48.0), Sense::click());
+                if !ui.is_rect_visible(rect) {
+                    continue;
+                }
+                let mut resp = named(resp, &sp.name).on_hover_cursor(egui::CursorIcon::PointingHand);
+                if collapsed {
+                    resp = resp.on_hover_text(&sp.name);
+                }
+                let hover = theme::anim_bool(ui.ctx(), resp.id.with("sp_h"), resp.hovered(), 0.12);
+                if hover > 0.0 {
+                    ui.painter().rect_filled(rect, 8.0, theme::glass(0.04 + 0.04 * hover));
+                }
+                let art_rect = Rect::from_center_size(pos2(rect.left() + ICON_X, rect.center().y), Vec2::splat(32.0));
+                super::widgets::paint_cover(ui, art_rect, &super::transfer::spotify_thumbs(&sp.art), 6.0, 1.0);
+
+                if a > 0.0 {
+                    let tx = art_rect.right() + 10.0;
+                    let title_w = (rect.right() - tx - 8.0).max(10.0);
+                    let title_g = widgets::galley(ui, &sp.name, theme::semibold(13.0), theme::text(), title_w);
+                    ui.painter().galley(pos2(tx, rect.center().y - 12.0), title_g, Color32::WHITE);
+                    let sub_g = widgets::galley(ui, "Spotify Playlist", theme::regular(11.0), theme::text_dim(), title_w);
+                    ui.painter().galley(pos2(tx, rect.center().y + 2.0), sub_g, Color32::WHITE);
+                }
+
+                if resp.clicked() {
+                    clicked_sp = Some(sp.clone());
+                }
+            }
+
             if ui.input(|i| i.pointer.any_released()) {
                 ui.data_mut(|d| d.remove_temp::<String>(drag_key));
+            }
+
+            if let Some(sp) = clicked_sp {
+                app.page = Page::Library(LibTab::Playlists);
+                app.spotify_selected = Some((sp.clone(), None, true));
+                let xfer = app.transfer.clone();
+                let b = app.backend.clone();
+                let slot = app.spotify_loaded_playlist.clone();
+                let src = sp.source.clone();
+                xfer.fetch_spotify_playlist(&b, src.clone(), move |res| {
+                    *slot.lock().unwrap() = Some((src, res));
+                });
             }
         });
     });
@@ -540,19 +597,8 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
         app.actions.push(Action::Go(Page::Settings));
     }
 
-    // Devices Connect Button
-    let dev_r = Rect::from_center_size(pos2(acc_r.left() - 22.0, cy), Vec2::splat(30.0));
-    let dev_resp = ui.interact(dev_r, ui.scope_id().with("top-devices"), Sense::click());
-    let dev_resp = named(dev_resp, "Mit einem Gerät verbinden (Spotify Connect Remote)").on_hover_text("Mit einem Gerät verbinden (Spotify Connect Remote)").on_hover_cursor(egui::CursorIcon::PointingHand);
-    let dev_h = theme::anim_bool(ui.ctx(), dev_resp.id.with("dev_h"), dev_resp.hovered() || app.devices_open, 0.12);
-    ui.painter().circle_filled(dev_r.center(), 15.0, theme::glass(if app.devices_open { 0.18 } else { 0.06 + 0.08 * dev_h }));
-    glyphs::draw(ui, dev_r.center(), 17.0, glyphs::DEVICES, if app.devices_open { app.accent_color() } else { theme::lerp_color(theme::text_dim(), theme::text(), dev_h) });
-    if dev_resp.clicked() {
-        app.actions.push(Action::ToggleDevices);
-    }
-
     if app.loading {
-        let spin = Rect::from_min_size(pos2(dev_r.left() - 28.0, cy - 10.0), Vec2::splat(20.0));
+        let spin = Rect::from_min_size(pos2(acc_r.left() - 28.0, cy - 10.0), Vec2::splat(20.0));
         let mut cui = ui.new_child(egui::UiBuilder::new().max_rect(spin));
         cui.spinner();
     }
@@ -845,38 +891,44 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
         }
     }
 
-    // Favorite Heart Button (Spotify style)
-    let heard = if hold.is_some() { track.clone() } else { app.playing_track().cloned().or_else(|| track.clone()) };
-    let liked = heard.as_ref().is_some_and(|t| app.liked.contains(&t.id));
-    let heart_r = Rect::from_center_size(pos2(left_rect.right() - 14.0, cy), Vec2::splat(28.0));
-    let hresp = ui.interact(heart_r, ui.scope_id().with("bar-heart"), Sense::click());
-    let hresp = named(hresp, if liked { "Aus Favoriten entfernen" } else { "Zu Favoriten hinzufügen" })
-        .on_hover_cursor(egui::CursorIcon::PointingHand);
-    let hh = theme::anim_bool(&ctx, hresp.id.with("h"), hresp.hovered(), 0.15);
-    let pop = heard.as_ref().map_or(0.0, |t| theme::anim_bool(&ctx, ("liked", &t.id), liked, 0.3));
-    let heart_color = if liked { accent } else { ink(hh) };
-    glyphs::draw(ui, heart_r.center(), 19.0 + pop * 3.0, if liked { glyphs::HEART_FILLED } else { glyphs::HEART }, heart_color);
-    if hresp.clicked() && let Some(t) = heard {
-        app.actions.push(Action::Like(t, !liked));
-    }
-
-    // Text between cover and heart
-    let text_l = cover.right() + 10.0;
-    let text_r = heart_r.left() - 8.0;
-    let text_w = (text_r - text_l).max(20.0);
+    // Text between cover and heart (Spotify style)
+    let text_l = cover.right() + 12.0;
+    let max_title_w = (left_rect.right() - text_l - 30.0).max(20.0);
     let title = track.as_ref().map(|t| t.title.clone()).unwrap_or_else(|| "BitChord".to_owned());
-    let tr = text_at(ui, pos2(text_l, cy - 13.0), &title, theme::semibold(13.5), theme::text(), text_w);
+    let title_font = theme::semibold(13.5);
+    let title_galley = widgets::galley(ui, &title, title_font.clone(), theme::text(), max_title_w);
+    let title_w = title_galley.size().x;
+    let tr = text_at(ui, pos2(text_l, cy - 13.0), &title, title_font, theme::text(), max_title_w);
     if let Some(t) = &track {
         let tre = ui.interact(tr, ui.scope_id().with("bar-title"), Sense::click());
         if named(tre, &t.title).on_hover_text(&t.title).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
             app.actions.push(Action::OpenNowPlaying(true));
         }
     }
+
+    // Favorite Heart Button (Spotify style: aligned with song title line)
+    let heard = if hold.is_some() { track.clone() } else { app.playing_track().cloned().or_else(|| track.clone()) };
+    let liked = heard.as_ref().is_some_and(|t| app.liked.contains(&t.id));
+    let heart_x = (text_l + title_w + 14.0).min(left_rect.right() - 14.0);
+    let heart_y = cy - 5.5;
+    let heart_r = Rect::from_center_size(pos2(heart_x, heart_y), Vec2::splat(24.0));
+    let hresp = ui.interact(heart_r, ui.scope_id().with("bar-heart"), Sense::click());
+    let hresp = named(hresp, if liked { "Aus Favoriten entfernen" } else { "Zu Favoriten hinzufügen" })
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    let hh = theme::anim_bool(&ctx, hresp.id.with("h"), hresp.hovered(), 0.15);
+    let pop = heard.as_ref().map_or(0.0, |t| theme::anim_bool(&ctx, ("liked", &t.id), liked, 0.3));
+    let heart_color = if liked { accent } else { ink(hh) };
+    glyphs::draw(ui, heart_r.center(), 17.0 + pop * 3.0, if liked { glyphs::HEART_FILLED } else { glyphs::HEART }, heart_color);
+    if hresp.clicked() && let Some(t) = heard {
+        app.actions.push(Action::Like(t, !liked));
+    }
+
     let mut ax = text_l;
+    let max_artist_w = (left_rect.right() - text_l - 10.0).max(10.0);
     if let Some(t) = &track {
         for (i, a) in t.artists.iter().enumerate() {
             let s = if i + 1 < t.artists.len() { format!("{}, ", a.name) } else { a.name.clone() };
-            let r = text_at(ui, pos2(ax, cy + 4.0), &s, theme::regular(11.5), theme::text_dim(), (text_l + text_w - ax).max(10.0));
+            let r = text_at(ui, pos2(ax, cy + 4.0), &s, theme::regular(11.5), theme::text_dim(), (text_l + max_artist_w - ax).max(10.0));
             if let Some(id) = &a.id {
                 let resp = ui.interact(r, ui.scope_id().with(("bar-artist", i)), Sense::click());
                 let resp = named(resp, &a.name).on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -888,7 +940,7 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
                 }
             }
             ax = r.right();
-            if ax > text_l + text_w {
+            if ax > text_l + max_artist_w {
                 break;
             }
         }
@@ -1090,12 +1142,32 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
         tool_x -= 30.0;
     }
 
-    // Details ("Ansicht aktueller Titel" - Spotify style)
+    // Details ("Aktueller Titel einblenden" - Spotify style)
     if !compact {
-        let r = rbtn(ui, tool_x, "details", "Ansicht aktueller Titel");
+        let tip = if app.details_open { "Aktueller Titel ausblenden" } else { "Aktueller Titel einblenden" };
+        let r = rbtn(ui, tool_x, "details", tip);
         let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered() || app.details_open, 0.15);
-        glyphs::draw(ui, r.rect.center(), 18.0, glyphs::MAXIMIZE_2, if app.details_open { accent } else { ink(h) });
+        let icon_fg = if app.details_open { accent } else { ink(h) };
+
+        // Authentic Spotify-style Now Playing View screen/sidebar icon
+        let center = r.rect.center();
+        let box_w = 16.0;
+        let box_h = 13.0;
+        let screen_box = Rect::from_center_size(center, vec2(box_w, box_h));
+        ui.painter().rect_stroke(screen_box, 2.5, egui::Stroke::new(1.3, icon_fg), egui::StrokeKind::Inside);
+        let split_x = screen_box.right() - 5.5;
+        ui.painter().vline(split_x, (screen_box.top() + 1.0)..=(screen_box.bottom() - 1.0), egui::Stroke::new(1.2, icon_fg));
+        if app.details_open {
+            let right_panel = Rect::from_min_max(pos2(split_x + 1.0, screen_box.top() + 1.5), pos2(screen_box.right() - 1.5, screen_box.bottom() - 1.5));
+            ui.painter().rect_filled(right_panel, 1.0, accent);
+            // Spotify active indicator dot underneath
+            ui.painter().circle_filled(pos2(center.x, r.rect.bottom() - 1.0), 1.6, accent);
+        }
+
         if r.clicked() {
+            if !app.details_open {
+                app.queue_open = false;
+            }
             app.actions.push(Action::ToggleDetails);
         }
         tool_x -= 30.0;
@@ -1111,6 +1183,9 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
             app.np_tab = if queue_open { NpTab::Art } else { NpTab::UpNext };
         } else {
             app.queue_open = !app.queue_open;
+            if app.queue_open {
+                app.details_open = false;
+            }
         }
     }
     tool_x -= 30.0;
