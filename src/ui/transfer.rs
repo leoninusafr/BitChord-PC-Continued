@@ -685,7 +685,7 @@ fn running(app: &mut App, ui: &mut Ui, _now: f64) {
                     ui.label(RichText::new("—").font(theme::regular(13.0)).color(theme::text_faint()));
                 }
                 let (text, font, color) = if k < at {
-                    (format!("✓ {label}"), theme::regular(13.0), theme::text())
+                    (label.clone(), theme::regular(13.0), theme::text())
                 } else if k == at {
                     (label.clone(), theme::semibold(13.0), theme::text())
                 } else {
@@ -972,7 +972,7 @@ fn review(app: &mut App, ui: &mut Ui) {
                             } else {
                                 let mark = match job.doubts[r].decision {
                                     Some(Decision::Skip) => "Skipped",
-                                    Some(_) => "✓",
+                                    Some(_) => "Match",
                                     None => "",
                                 };
                                 (job.doubts[r].index, mark, r == at)
