@@ -566,6 +566,7 @@ pub struct App {
     /// The sidebar playlists' order (by id), and the ones hidden from it.
     playlist_order: Vec<String>,
     hidden_playlists: HashSet<String>,
+    pub spotify_excluded_playlists: HashSet<String>,
     /// The collection page whose inline search is open, and what's typed in it.
     coll_search: Option<(String, String)>,
     actions: Vec<Action>,
@@ -723,6 +724,7 @@ impl App {
             sidebar_collapsed: get("sidebar_collapsed").is_some_and(|v| v == "1"),
             playlist_order: get("playlist_order").map(|v| v.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect()).unwrap_or_default(),
             hidden_playlists: get("hidden_playlists").map(|v| v.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect()).unwrap_or_default(),
+            spotify_excluded_playlists: get("spotify_excluded_playlists").map(|v| v.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect()).unwrap_or_default(),
             coll_search: None,
             update_checked: None,
             update_announced: false,
@@ -1596,15 +1598,11 @@ impl eframe::App for App {
             };
 
             let nav_panel = egui::Panel::left("nav");
-            let nav_panel = if collapse > 0.05 && collapse < 0.95 {
+            let nav_panel = if is_collapsed {
                 nav_panel.resizable(false).exact_size(current_w)
-            } else if is_collapsed {
-                nav_panel.resizable(true)
-                    .size_range(shell::RAIL_W..=420.0)
-                    .default_size(shell::RAIL_W)
             } else {
                 nav_panel.resizable(true)
-                    .size_range(140.0..=420.0)
+                    .size_range(160.0..=420.0)
                     .default_size(target_w)
             };
 
@@ -1614,11 +1612,7 @@ impl eframe::App for App {
                 .show(ui, |ui| shell::sidebar(self, ui));
 
             let w = res.response.rect.width();
-            if self.sidebar_collapsed {
-                if w > 115.0 {
-                    self.sidebar_collapsed = false;
-                }
-            } else {
+            if !self.sidebar_collapsed {
                 if w < 160.0 {
                     self.sidebar_collapsed = true;
                 } else if w >= 190.0 {
@@ -1786,6 +1780,7 @@ impl eframe::App for App {
         }
         storage.set_string("playlist_order", self.playlist_order.join("\n"));
         storage.set_string("hidden_playlists", self.hidden_playlists.iter().cloned().collect::<Vec<_>>().join("\n"));
+        storage.set_string("spotify_excluded_playlists", self.spotify_excluded_playlists.iter().cloned().collect::<Vec<_>>().join("\n"));
         // Pretend versions (dev hook) mustn't decide the real "what's new".
         if std::env::var_os("YTM_UPDATE_AS").is_none() {
             storage.set_string("last_version", crate::update::current_version());

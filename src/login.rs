@@ -243,7 +243,7 @@ fn run(site: Site, profile_dir: PathBuf) -> anyhow::Result<Outcome> {
                 Ok(cookies) => {
                     // Landing there while signed out also fires this; only a signed-in
                     // session has the session cookie (SAPISID, sp_dc).
-                    if let Some(c) = cookies.iter().find(|c| c.name() == site.session_cookie()) {
+                    if let Some(c) = cookies.iter().find(|c| c.name() == site.session_cookie() && c.value().trim().len() > 10) {
                         outcome = Outcome::Cookie(match site {
                             Site::Spotify => c.value().to_owned(),
                             Site::Google => cookies.iter().map(|c| format!("{}={}", c.name(), c.value())).collect::<Vec<_>>().join("; "),

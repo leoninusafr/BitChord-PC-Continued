@@ -254,8 +254,16 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     let cr = egui::CornerRadius::same(radius.min(255.0) as u8);
     let glow_strength = if app.cover_glow { cs.glow.max(0.65) } else { cs.glow };
     if glow_strength > 0.0 {
-        let s = egui::epaint::Shadow { offset: [0, 16], blur: 90, spread: 6, color: theme::with_alpha(app.accent_color(), glow_strength.min(1.0) * 0.7) };
-        ui.painter().add(s.as_shape(art, cr));
+        let accent = app.accent_color();
+        // Layer 1: Wide atmospheric halo (broad soft bloom)
+        let s1 = egui::epaint::Shadow { offset: [0, 0], blur: 140, spread: 14, color: theme::with_alpha(accent, glow_strength * 0.22) };
+        ui.painter().add(s1.as_shape(art, cr));
+        // Layer 2: Mid-range ambient diffusion
+        let s2 = egui::epaint::Shadow { offset: [0, 0], blur: 70, spread: 6, color: theme::with_alpha(accent, glow_strength * 0.32) };
+        ui.painter().add(s2.as_shape(art, cr));
+        // Layer 3: Radiant inner aura
+        let s3 = egui::epaint::Shadow { offset: [0, 0], blur: 24, spread: 2, color: theme::with_alpha(accent, glow_strength * 0.42) };
+        ui.painter().add(s3.as_shape(art, cr));
     }
     if cs.shadow > 0.0 {
         widgets::soft_shadow(ui, art, radius.min(255.0), 60.0, cs.shadow.min(1.0));

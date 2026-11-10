@@ -862,8 +862,10 @@ fn collection(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
                     format!("{} min", total / 60)
                 };
                 let s_suffix = if count == 1 { "song" } else { "songs" };
+                let sync_excluded = !is_album && app.spotify_excluded_playlists.contains(id);
+                let sync_tag = if sync_excluded { " • Spotify: Excluded from sync" } else { "" };
                 ui.label(
-                    RichText::new(format!("{count} {s_suffix} • {time_str}")).font(theme::regular(13.5)).color(theme::text_faint()),
+                    RichText::new(format!("{count} {s_suffix} • {time_str}{sync_tag}")).font(theme::regular(13.5)).color(theme::text_faint()),
                 );
             }
             if let Some(d) = c.description.as_deref().filter(|d| !d.trim().is_empty()) {
@@ -932,6 +934,23 @@ fn collection(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
                     }
                     if widgets::menu_action(ui, Some(icon::LINK), "Share") {
                         acts.push(Action::Share(target.clone()));
+                    }
+                    if !is_album && !auto {
+                        ui.separator();
+                        let is_excluded = app.spotify_excluded_playlists.contains(id);
+                        let label = if is_excluded {
+                            "Include in Spotify Sync"
+                        } else {
+                            "Exclude from Spotify Sync"
+                        };
+                        let sym = if is_excluded { icon::CHECK } else { icon::X };
+                        if widgets::menu_action(ui, Some(sym), label) {
+                            if is_excluded {
+                                app.spotify_excluded_playlists.remove(id);
+                            } else {
+                                app.spotify_excluded_playlists.insert(id.to_string());
+                            }
+                        }
                     }
                     ui.add_space(3.0);
                 });

@@ -1426,6 +1426,48 @@ pub fn settings_section(app: &mut App, ui: &mut Ui) {
                 super::pages::toggle(ui, &mut app.spotify_two_way_sync, "2-Way Spotify Sync");
             },
         );
+
+        if let Some(lib) = app.library.as_ref() {
+            let playlists: Vec<(String, String)> = lib.playlists.iter().filter_map(|c| {
+                if let crate::model::Target::Playlist(id) = &c.target {
+                    Some((id.clone(), c.title.clone()))
+                } else {
+                    None
+                }
+            }).collect();
+
+            if !playlists.is_empty() {
+                ui.add_space(8.0);
+                let excluded_count = playlists.iter().filter(|(id, _)| app.spotify_excluded_playlists.contains(id)).count();
+                let summary_title = if excluded_count > 0 {
+                    format!("Playlist Sync Filter ({} of {} excluded)", excluded_count, playlists.len())
+                } else {
+                    format!("Playlist Sync Filter (All {} will sync)", playlists.len())
+                };
+
+                egui::CollapsingHeader::new(RichText::new(summary_title).font(theme::semibold(13.0)))
+                    .default_open(excluded_count > 0)
+                    .show(ui, |ui| {
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("Configure sync inclusion per playlist. You can uncheck playlists you never want synced to Spotify — even before turning sync on.")
+                                .font(theme::regular(12.0))
+                                .color(theme::text_dim()),
+                        );
+                        ui.add_space(6.0);
+                        for (id, title) in playlists {
+                            let mut included = !app.spotify_excluded_playlists.contains(&id);
+                            if ui.checkbox(&mut included, title).changed() {
+                                if included {
+                                    app.spotify_excluded_playlists.remove(&id);
+                                } else {
+                                    app.spotify_excluded_playlists.insert(id);
+                                }
+                            }
+                        }
+                    });
+            }
+        }
     });
     if open {
         app.actions.push(Action::Go(Page::Transfer));

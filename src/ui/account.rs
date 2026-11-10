@@ -40,6 +40,11 @@ impl App {
         if xfer.signing_in.swap(true, Ordering::Relaxed) {
             return;
         }
+        // If not already signed in, clear any stale webview cache so the sign-in window
+        // always opens with a clean, responsive Spotify login page on the very first try.
+        if !matches!(*xfer.account.lock().unwrap(), crate::transfer::Account::SignedIn { .. }) {
+            crate::login::forget(&xfer.spotify_profile());
+        }
         let (backend, ctx) = (self.backend.clone(), ctx.clone());
         crate::login::spawn(crate::login::Site::Spotify, xfer.spotify_profile(), move |outcome| {
             match outcome {

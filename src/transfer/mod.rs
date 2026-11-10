@@ -335,6 +335,7 @@ impl Transfer {
                 Ok(a) => Account::SignedIn { name: a.name, library: a.library },
                 Err(e) if e.is::<spotify::SignedOut>() => {
                     crate::vault::delete(VAULT, &this.data_dir);
+                    crate::login::forget(&this.spotify_profile());
                     Account::Failed(e.to_string())
                 }
                 Err(e) => {

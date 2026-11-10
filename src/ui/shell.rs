@@ -435,7 +435,21 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                     }
                 }
                 egui::Popup::context_menu(&resp).show(|ui| {
-                    ui.set_min_width(190.0);
+                    ui.set_min_width(200.0);
+                    let is_excluded = app.spotify_excluded_playlists.contains(&id);
+                    let label = if is_excluded {
+                        "Include in Spotify Sync"
+                    } else {
+                        "Exclude from Spotify Sync"
+                    };
+                    if ui.button(label).clicked() {
+                        if is_excluded {
+                            app.spotify_excluded_playlists.remove(&id);
+                        } else {
+                            app.spotify_excluded_playlists.insert(id.clone());
+                        }
+                        ui.close();
+                    }
                     if ui.button("Hide from sidebar").clicked() {
                         hide = Some(id.clone());
                         ui.close();
@@ -633,8 +647,8 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
         let resp = named(resp, tip).on_hover_text(tip);
         let resp = if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
         let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered() && enabled, 0.12);
-        ui.painter().circle_filled(r.center(), 14.0, theme::glass(if enabled { 0.06 + 0.10 * h } else { 0.03 }));
-        let fg = if enabled { theme::lerp_color(theme::text_dim(), theme::text(), h) } else { theme::with_alpha(theme::text_dim(), 0.35) };
+        ui.painter().circle_filled(r.center(), 14.0, theme::glass(if enabled { 0.06 + 0.10 * h } else { 0.04 }));
+        let fg = if enabled { theme::lerp_color(theme::text_dim(), theme::text(), h) } else { theme::with_alpha(theme::text(), 0.32) };
         icon_at(ui, r.center(), icon_char, 16.0, fg);
         resp
     };
