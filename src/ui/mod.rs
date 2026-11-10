@@ -819,7 +819,7 @@ impl App {
             queue_open: false,
             details_open: false,
             right_tab: RightTab::Details,
-            details_width: 340.0,
+            details_width: 270.0,
             sidebar_width: 250.0,
             followed_artists: Default::default(),
             spotify_two_way_sync: false,
@@ -1614,6 +1614,13 @@ impl eframe::App for App {
         if !self.fullscreen && !covered {
             // The top of the window, down to the search box's row: what's on it comes after.
             titlebar::drag_area(ui, egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), titlebar::HEIGHT)), "main");
+
+            // Continuous top bar frosted glass backdrop across the entire window (stretching behind sidebar and right drawer tiles)
+            let top_header_h = titlebar::top_margin(14, 42.0) as f32 + 48.0;
+            let top_header_rect = egui::Rect::from_min_max(egui::pos2(screen.left(), screen.top()), egui::pos2(screen.right(), top_header_h));
+            ui.painter().rect_filled(top_header_rect, 0.0, theme::panel(0.38));
+            ui.painter().rect_filled(top_header_rect, 0.0, theme::glass(0.06));
+            ui.painter().hline(top_header_rect.x_range(), top_header_rect.bottom(), egui::Stroke::new(1.0, theme::glass(0.08)));
         }
         if !self.fullscreen {
             // Liquid Frosted Glass bottom player bar spanning the full width of the window (all the way to the left edge)
@@ -1633,21 +1640,21 @@ impl eframe::App for App {
                 SidebarStyle::Glass => egui::Frame::new()
                     .fill(theme::panel(side_alpha.max(0.35)))
                     .stroke(egui::Stroke::new(1.0, theme::glass(0.10)))
-                    .corner_radius(egui::CornerRadius::same(12))
-                    .outer_margin(egui::Margin { left: 8, right: 4, top: 8, bottom: 8 })
+                    .corner_radius(egui::CornerRadius { nw: 0, ne: 12, se: 0, sw: 0 })
+                    .outer_margin(egui::Margin { left: 0, right: 4, top: 6, bottom: 0 })
                     .inner_margin(side_margin),
                 SidebarStyle::Transparent => egui::Frame::new().inner_margin(side_margin),
                 SidebarStyle::Solid => egui::Frame::new()
                     .fill(look.solid())
                     .stroke(egui::Stroke::new(1.0, theme::glass(0.10)))
-                    .corner_radius(egui::CornerRadius::same(12))
-                    .outer_margin(egui::Margin { left: 8, right: 4, top: 8, bottom: 8 })
+                    .corner_radius(egui::CornerRadius { nw: 0, ne: 12, se: 0, sw: 0 })
+                    .outer_margin(egui::Margin { left: 0, right: 4, top: 6, bottom: 0 })
                     .inner_margin(side_margin),
                 SidebarStyle::Floating => egui::Frame::new()
                     .fill(theme::panel(side_alpha.max(0.35)))
                     .stroke(egui::Stroke::new(1.0, theme::glass(0.10)))
-                    .corner_radius(egui::CornerRadius::same(theme::panel_radius().max(12)))
-                    .outer_margin(egui::Margin { left: 10, right: 4, top: 10, bottom: 10 })
+                    .corner_radius(egui::CornerRadius { nw: 0, ne: 12, se: 0, sw: 0 })
+                    .outer_margin(egui::Margin { left: 0, right: 4, top: 6, bottom: 0 })
                     .inner_margin(egui::Margin::symmetric(12, 14)),
             };
             let collapse = shell::sidebar_collapse(self, &ctx);
@@ -1686,34 +1693,34 @@ impl eframe::App for App {
             let q = theme::anim_bool(&ctx, "queue-drawer", self.queue_open && !self.np_open, 0.25);
             if q > 0.01 {
                 egui::Panel::right("queue").resizable(false)
-                    .exact_size(340.0 * q)
+                    .exact_size(280.0 * q)
                     .frame(egui::Frame::new()
                         .fill(theme::panel(0.48))
                         .stroke(egui::Stroke::new(1.0, theme::glass(0.12)))
-                        .corner_radius(egui::CornerRadius::same(12))
-                        .outer_margin(egui::Margin { left: 4, right: 8, top: 8, bottom: 8 })
+                        .corner_radius(egui::CornerRadius { nw: 12, ne: 0, se: 0, sw: 0 })
+                        .outer_margin(egui::Margin { left: 4, right: 0, top: 6, bottom: 0 })
                         .inner_margin(egui::Margin { left: 14, right: 14, top: titlebar::top_margin(14, 32.0) + 4, bottom: 14 }))
                     .show_separator_line(false)
                     .show(ui, |ui| shell::queue_drawer(self, ui));
             }
             let d = theme::anim_bool(&ctx, "np-details-drawer", self.details_open && !self.np_open, 0.25);
             if d > 0.01 {
-                let target_w = self.details_width.clamp(260.0, 520.0);
+                let target_w = self.details_width.clamp(230.0, 380.0);
                 egui::Panel::right("np-details")
                     .resizable(true)
-                    .size_range((260.0 * d)..=(520.0 * d))
+                    .size_range((220.0 * d)..=(380.0 * d))
                     .default_size(target_w * d)
                     .frame(egui::Frame::new()
                         .fill(theme::panel(0.48))
                         .stroke(egui::Stroke::new(1.0, theme::glass(0.12)))
-                        .corner_radius(egui::CornerRadius::same(12))
-                        .outer_margin(egui::Margin { left: 4, right: 8, top: 8, bottom: 8 })
+                        .corner_radius(egui::CornerRadius { nw: 12, ne: 0, se: 0, sw: 0 })
+                        .outer_margin(egui::Margin { left: 4, right: 0, top: 6, bottom: 0 })
                         .inner_margin(egui::Margin { left: 14, right: 14, top: titlebar::top_margin(14, 32.0) + 4, bottom: 14 }))
                     .show_separator_line(false)
                     .show(ui, |ui| {
                         let w = ui.available_width();
-                        if w > 200.0 && (d - 1.0).abs() < 0.05 {
-                            self.details_width = w.clamp(260.0, 520.0);
+                        if w > 180.0 && (d - 1.0).abs() < 0.05 {
+                            self.details_width = w.clamp(230.0, 380.0);
                         }
                         details::details_panel(self, ui);
                     });

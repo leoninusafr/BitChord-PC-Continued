@@ -10,84 +10,6 @@ use crate::model::Target;
 use crate::theme;
 
 pub fn details_panel(app: &mut App, ui: &mut Ui) {
-    // 1. Header with Segmented Tab Switcher (Details vs Freunde) and Close button (✕)
-    ui.horizontal(|ui| {
-        let width = ui.available_width();
-        let close_size = 28.0;
-        let tabs_w = (width - close_size - 12.0).max(80.0).min(230.0);
-
-        // Segmented pill control
-        let (seg_rect, _) = ui.allocate_exact_size(vec2(tabs_w, 30.0), Sense::hover());
-        ui.painter().rect_filled(seg_rect, 15.0, theme::glass(0.08));
-
-        let half_w = seg_rect.width() / 2.0;
-        let det_rect = Rect::from_min_size(seg_rect.min, vec2(half_w, seg_rect.height()));
-        let fri_rect = Rect::from_min_size(pos2(seg_rect.left() + half_w, seg_rect.top()), vec2(half_w, seg_rect.height()));
-
-        let is_det = app.right_tab == RightTab::Details;
-        let is_fri = app.right_tab == RightTab::Friends;
-
-        let det_resp = ui.interact(det_rect, ui.scope_id().with("tab-details"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-        let fri_resp = ui.interact(fri_rect, ui.scope_id().with("tab-friends"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-
-        if det_resp.clicked() && !is_det {
-            app.right_tab = RightTab::Details;
-        }
-        if fri_resp.clicked() && !is_fri {
-            app.right_tab = RightTab::Friends;
-            if app.friend_activity_last_fetch.is_none() || app.friend_activity_last_fetch.unwrap().elapsed() > std::time::Duration::from_secs(15) {
-                app.refresh_friend_activity();
-            }
-        }
-
-        // Active tab background pill
-        let anim_det = theme::anim_bool(ui.ctx(), "tab-det-active", is_det, 0.18);
-        if anim_det > 0.001 {
-            let r = det_rect.shrink(2.0);
-            ui.painter().rect_filled(r, 13.0, theme::glass(0.18 * anim_det));
-            ui.painter().rect_stroke(r, 13.0, egui::Stroke::new(1.0, theme::glass(0.20 * anim_det)), egui::StrokeKind::Inside);
-        }
-        let anim_fri = theme::anim_bool(ui.ctx(), "tab-fri-active", is_fri, 0.18);
-        if anim_fri > 0.001 {
-            let r = fri_rect.shrink(2.0);
-            ui.painter().rect_filled(r, 13.0, theme::glass(0.18 * anim_fri));
-            ui.painter().rect_stroke(r, 13.0, egui::Stroke::new(1.0, theme::glass(0.20 * anim_fri)), egui::StrokeKind::Inside);
-        }
-
-        // Details text
-        let det_fg = if is_det { Color32::WHITE } else { theme::text_dim() };
-        ui.painter().text(det_rect.center(), Align2::CENTER_CENTER, "Details", if is_det { theme::bold(13.0) } else { theme::semibold(12.5) }, det_fg);
-
-        // Friends text & count badge
-        let fri_fg = if is_fri { Color32::WHITE } else { theme::text_dim() };
-        let fri_label = if !app.friend_activity.is_empty() {
-            format!("Friends ({})", app.friend_activity.len())
-        } else {
-            "Friends".to_string()
-        };
-        ui.painter().text(fri_rect.center(), Align2::CENTER_CENTER, &fri_label, if is_fri { theme::bold(13.0) } else { theme::semibold(12.5) }, fri_fg);
-
-        // Spacer to push close button to the far right
-        let remaining_w = ui.available_width() - close_size;
-        if remaining_w > 0.0 {
-            ui.add_space(remaining_w);
-        }
-
-        // Close button (✕)
-        let (close_rect, close_resp) = ui.allocate_exact_size(Vec2::splat(close_size), Sense::click());
-        let close_resp = close_resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Close");
-        let ch = theme::anim_bool(ui.ctx(), close_resp.id.with("ch"), close_resp.hovered(), 0.12);
-        if ch > 0.0 {
-            ui.painter().circle_filled(close_rect.center(), close_size / 2.0, theme::glass(0.12 * ch));
-        }
-        super::widgets::icon_at(ui, close_rect.center(), crate::theme::icon::X, 15.0, theme::lerp_color(theme::text_dim(), theme::text(), ch));
-        if close_resp.clicked() {
-            app.details_open = false;
-        }
-    });
-
-    ui.add_space(10.0);
-
     match app.right_tab {
         RightTab::Details => details_content(app, ui),
         RightTab::Friends => friends_content(app, ui),
@@ -116,7 +38,7 @@ fn details_content(app: &mut App, ui: &mut Ui) {
             header_title,
             theme::bold(17.0),
             theme::text(),
-            false,
+            app.playing(),
             is_link,
         );
         if let Some(target) = header_target {
@@ -175,16 +97,18 @@ fn details_content(app: &mut App, ui: &mut Ui) {
 
             // 2. Title & Favorite Heart on same horizontal baseline (Spotify style)
             ui.horizontal(|ui| {
-                let action_w = 32.0;
-                let title_w = (width - action_w - 6.0).max(10.0);
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let heart_size = 28.0;
+                let avail = ui.available_width();
+                let title_w = (avail - heart_size - ui.spacing().item_spacing.x - 4.0).max(10.0);
 
-                let (title_box, _) = ui.allocate_exact_size(vec2(title_w, 24.0), Sense::hover());
+                let (title_box, _) = ui.allocate_exact_size(vec2(title_w, 26.0), Sense::hover());
                 let (_, title_resp) = super::widgets::marquee_title(
                     ui,
                     ui.scope_id().with("details-title"),
                     title_box,
                     &t.title,
-                    theme::bold(18.0),
+                    theme::bold(17.0),
                     theme::text(),
                     app.playing(),
                     true,
@@ -203,7 +127,7 @@ fn details_content(app: &mut App, ui: &mut Ui) {
                     }
                 }
 
-                let (btn_r, hresp) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
+                let (btn_r, hresp) = ui.allocate_exact_size(Vec2::splat(heart_size), Sense::click());
                 let hresp = named(hresp, if liked { "Remove from favorites" } else { "Add to favorites" })
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                 let hh = theme::anim_bool(ui.ctx(), hresp.id.with("hh"), hresp.hovered(), 0.15);
@@ -242,38 +166,35 @@ fn details_content(app: &mut App, ui: &mut Ui) {
             });
             ui.add_space(16.0);
 
-            // 3. "About the artist" Card with integrated "Follow" / "Following" button
+            // 3. "About the artist" Card: clean, balanced & symmetrical (Spotify Desktop parity)
             let artist_name = t.artists.first().map(|a| a.name.as_str()).unwrap_or("Artist");
             let artist_id = t.artists.first().and_then(|a| a.id.clone());
 
-            let (card_rect, card_resp) = ui.allocate_exact_size(vec2(width, 126.0), Sense::click());
+            let card_h = 76.0;
+            let (card_rect, card_resp) = ui.allocate_exact_size(vec2(width, card_h), Sense::click());
             let ch = theme::anim_bool(ui.ctx(), card_resp.id.with("ch"), card_resp.hovered(), 0.15);
-            ui.painter().rect_filled(card_rect, 10.0, theme::panel(0.48 + 0.14 * ch));
+            ui.painter().rect_filled(card_rect, 10.0, theme::panel(0.48 + 0.12 * ch));
             ui.painter().rect_stroke(card_rect, 10.0, egui::Stroke::new(1.0, theme::glass(0.12)), egui::StrokeKind::Inside);
 
-            let text_rect = card_rect.shrink(14.0);
+            let inner = card_rect.shrink(12.0);
             ui.painter().text(
-                text_rect.left_top(),
+                inner.left_top(),
                 Align2::LEFT_TOP,
-                "About the artist",
-                theme::bold(12.0),
-                theme::text_dim(),
+                "ABOUT THE ARTIST",
+                theme::bold(10.5),
+                theme::text_faint(),
             );
 
-            // Artist name with hover illumination
-            let name_font = theme::bold(17.0);
-            let name_g = super::widgets::galley(ui, artist_name, name_font, theme::text(), text_rect.width());
-            let name_r = Rect::from_min_size(text_rect.left_top() + vec2(0.0, 22.0), name_g.size());
-            let an_resp = ui.interact(name_r, ui.scope_id().with("about-artist-name"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-            let anh = theme::anim_bool(ui.ctx(), an_resp.id.with("anh"), an_resp.hovered(), 0.12);
-            let an_color = theme::lerp_color(theme::text(), Color32::WHITE, anh);
-            ui.painter().galley(name_r.left_top(), name_g, an_color);
-
-            // Spotify-style "Follow" / "Following" pill button inside card (generously spaced below name)
+            // Follow button on the right
             let is_following = app.followed_artists.contains(artist_name);
-            let btn_size = vec2(96.0, 28.0);
-            let btn_rect = Rect::from_min_size(pos2(text_rect.left(), text_rect.top() + 58.0), btn_size);
-            let bresp = ui.interact(btn_rect, ui.scope_id().with("details-follow-btn"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+            let btn_w = if is_following { 84.0 } else { 72.0 };
+            let btn_size = vec2(btn_w, 28.0);
+            let btn_rect = Rect::from_min_size(
+                pos2(inner.right() - btn_w, inner.bottom() - 28.0),
+                btn_size,
+            );
+            let bresp = ui.interact(btn_rect, ui.scope_id().with("details-follow-btn"), Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
             let bh = theme::anim_bool(ui.ctx(), bresp.id.with("bh"), bresp.hovered(), 0.15);
             if is_following {
                 ui.painter().rect_filled(btn_rect, 14.0, theme::glass(0.20 + 0.08 * bh));
@@ -297,32 +218,24 @@ fn details_content(app: &mut App, ui: &mut Ui) {
                 );
             }
 
-            let is_artist_blocked = artist_id.as_ref().is_some_and(|id| app.blocked_artists.contains_key(id));
-            let block_btn_size = vec2(78.0, 28.0);
-            let block_btn_rect = Rect::from_min_size(pos2(btn_rect.right() + 8.0, btn_rect.top()), block_btn_size);
-            let blk_resp = ui.interact(block_btn_rect, ui.scope_id().with("details-block-artist-btn"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-            let blk_h = theme::anim_bool(ui.ctx(), blk_resp.id.with("blk_h"), blk_resp.hovered(), 0.15);
-            if is_artist_blocked {
-                ui.painter().rect_filled(block_btn_rect, 14.0, theme::glass(0.20 + 0.08 * blk_h));
-                ui.painter().rect_stroke(block_btn_rect, 14.0, egui::Stroke::new(1.0, Color32::from_rgb(239, 68, 68).gamma_multiply(0.6)), egui::StrokeKind::Inside);
-                ui.painter().text(
-                    block_btn_rect.center(),
-                    Align2::CENTER_CENTER,
-                    "Blocked",
-                    theme::semibold(12.0),
-                    Color32::from_rgb(239, 68, 68),
-                );
-            } else {
-                ui.painter().rect_filled(block_btn_rect, 14.0, theme::glass(0.08 + 0.10 * blk_h));
-                ui.painter().rect_stroke(block_btn_rect, 14.0, egui::Stroke::new(1.0, theme::glass(0.20)), egui::StrokeKind::Inside);
-                ui.painter().text(
-                    block_btn_rect.center(),
-                    Align2::CENTER_CENTER,
-                    "Block",
-                    theme::semibold(12.0),
-                    theme::lerp_color(theme::text_dim(), theme::text(), blk_h),
-                );
-            }
+            // Artist avatar (32px circular) + Name
+            let avatar_size = 32.0;
+            let avatar_rect = Rect::from_min_size(
+                pos2(inner.left(), inner.bottom() - 30.0),
+                Vec2::splat(avatar_size),
+            );
+            ui.painter().circle_filled(avatar_rect.center(), avatar_size / 2.0, theme::glass(0.16));
+            let initial = artist_name.chars().next().unwrap_or('?');
+            ui.painter().text(avatar_rect.center(), Align2::CENTER_CENTER, initial, theme::bold(14.0), Color32::WHITE);
+
+            let name_x = avatar_rect.right() + 10.0;
+            let max_name_w = (btn_rect.left() - name_x - 8.0).max(10.0);
+            let name_g = super::widgets::galley(ui, artist_name, theme::bold(15.0), theme::text(), max_name_w);
+            let name_r = Rect::from_min_size(pos2(name_x, avatar_rect.center().y - name_g.size().y / 2.0), name_g.size());
+            let an_resp = ui.interact(name_r, ui.scope_id().with("about-artist-name"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+            let anh = theme::anim_bool(ui.ctx(), an_resp.id.with("anh"), an_resp.hovered() || card_resp.hovered(), 0.12);
+            let an_color = theme::lerp_color(theme::text(), Color32::WHITE, anh);
+            ui.painter().galley(name_r.left_top(), name_g, an_color);
 
             if bresp.clicked() {
                 if is_following {
@@ -330,13 +243,7 @@ fn details_content(app: &mut App, ui: &mut Ui) {
                 } else {
                     app.followed_artists.insert(artist_name.to_string());
                 }
-            } else if blk_resp.clicked() && let Some(aid) = artist_id {
-                if is_artist_blocked {
-                    app.actions.push(Action::UnblockArtist(aid.to_string()));
-                } else {
-                    app.actions.push(Action::BlockArtist(aid.to_string(), artist_name.to_string()));
-                }
-            } else if card_resp.clicked() && let Some(aid) = artist_id {
+            } else if (card_resp.clicked() || an_resp.clicked()) && let Some(aid) = artist_id {
                 app.actions.push(Action::Open(Target::Artist(aid)));
             }
             ui.add_space(14.0);

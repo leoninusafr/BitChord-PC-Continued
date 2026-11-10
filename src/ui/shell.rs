@@ -630,14 +630,16 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
     let cy = panel.top() + 18.0;
 
     // Floating Frosted Glass Backdrop:
-    // Smooth translucent liquid glass so content scrolling underneath remains softly visible
+    // Smooth translucent liquid glass starting at screen.top() so content scrolling underneath remains softly visible without cutoffs
+    let screen = ui.ctx().content_rect();
+    let bar_bottom = row.bottom() + 4.0;
     let glass_rect = Rect::from_min_max(
-        pos2(panel.left() - 28.0, panel.top() - 14.0),
-        pos2(panel.right() + 28.0, row.bottom() + 6.0),
+        pos2(panel.left() - 28.0, screen.top()),
+        pos2(panel.right() + 28.0, bar_bottom),
     );
-    ui.painter().rect_filled(glass_rect, 0.0, theme::panel(0.82));
-    ui.painter().rect_filled(glass_rect, 0.0, theme::glass(0.08));
-    ui.painter().hline(glass_rect.x_range(), glass_rect.bottom(), egui::Stroke::new(1.0, theme::glass(0.12)));
+    ui.painter().rect_filled(glass_rect, 0.0, theme::panel(0.38));
+    ui.painter().rect_filled(glass_rect, 0.0, theme::glass(0.06));
+    ui.painter().hline(glass_rect.x_range(), glass_rect.bottom(), egui::Stroke::new(1.0, theme::glass(0.08)));
 
     // 1. LEFT SECTION: Back, Forward, Spicetify Random Song Dice ("Würfel")
     let left_start = panel.left();
@@ -1089,10 +1091,11 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
     let full = ui.max_rect();
     let ctx = ui.ctx().clone();
 
-    // Frosted Liquid Glass surface across the full-width player bar
-    ui.painter().rect_filled(full, 0.0, theme::panel(0.68));
-    ui.painter().rect_filled(full, 0.0, theme::glass(0.06));
-    ui.painter().hline(full.x_range(), full.top(), egui::Stroke::new(1.0, theme::glass(0.12)));
+    // Frosted Liquid Glass surface across the full-width player bar with rounded upper corners
+    let bar_corners = egui::CornerRadius { nw: 12, ne: 12, sw: 0, se: 0 };
+    ui.painter().rect_filled(full, bar_corners, theme::panel(0.40));
+    ui.painter().rect_filled(full, bar_corners, theme::glass(0.06));
+    ui.painter().rect_stroke(full, bar_corners, egui::Stroke::new(1.0, theme::glass(0.12)), egui::StrokeKind::Inside);
 
     let status = app.audio.status.clone();
     let hold = app.mix_hold().map(|h| (h.total, h.mix, app.mix_hold_pos(h)));
@@ -1108,10 +1111,8 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
     let pad = 16.0;
     let w = full.width();
     let compact = w < 650.0;
-    let narrow = w < 880.0;
-
-    let left_w = if compact { 160.0 } else if narrow { 220.0 } else { 280.0 };
-    let right_w = if compact { 160.0 } else if narrow { 230.0 } else { 280.0 };
+    let left_w = (w * 0.28).clamp(240.0, 320.0).min((w - 380.0).max(180.0));
+    let right_w = (w * 0.28).clamp(240.0, 320.0).min((w - 380.0).max(180.0));
 
     let left_rect = Rect::from_min_max(pos2(full.left() + pad, full.top()), pos2(full.left() + pad + left_w, full.bottom()));
     let right_rect = Rect::from_min_max(pos2(full.right() - pad - right_w, full.top()), pos2(full.right() - pad, full.bottom()));
@@ -1155,10 +1156,11 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
 
     // Text between cover and heart (Spotify style)
     let text_l = cover.right() + 12.0;
-    let max_title_w = (left_rect.right() - text_l - 30.0).max(20.0);
+    let heart_reserve = 36.0;
+    let max_title_w = (left_rect.right() - text_l - heart_reserve).max(20.0);
     let title = track.as_ref().map(|t| t.title.clone()).unwrap_or_else(|| "BitChord".to_owned());
     let title_font = theme::semibold(13.5);
-    let title_rect = Rect::from_min_size(pos2(text_l, cy - 13.0), vec2(max_title_w, 18.0));
+    let title_rect = Rect::from_min_size(pos2(text_l, cy - 14.0), vec2(max_title_w, 20.0));
     let (tr, tre) = widgets::marquee_title(
         ui,
         ui.scope_id().with("bar-title"),
@@ -1181,7 +1183,7 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
     }
 
     // Favorite Heart Button (Spotify style: aligned with song title line)
-    let heart_x = (text_l + title_w + 14.0).min(left_rect.right() - 14.0);
+    let heart_x = (text_l + title_w + 16.0).min(left_rect.right() - 14.0);
     let heart_y = cy - 5.5;
     let heart_r = Rect::from_center_size(pos2(heart_x, heart_y), Vec2::splat(24.0));
     let hresp = ui.interact(heart_r, ui.scope_id().with("bar-heart"), Sense::click());
