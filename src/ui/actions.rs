@@ -233,6 +233,10 @@ impl App {
                 self.set_liked(std::slice::from_ref(&t), false);
                 self.backend.request(Req::Dislike(t.id));
             }
+            Action::BlockTrack(t) => self.block_track(t),
+            Action::BlockArtist(id, name) => self.block_artist(id, name),
+            Action::UnblockTrack(id) => self.unblock_track(&id),
+            Action::UnblockArtist(id) => self.unblock_artist(&id),
             Action::Share(target) => {
                 self.share_pending = Some(share_url(&target));
                 self.toast("Link copied");

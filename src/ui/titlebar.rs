@@ -102,6 +102,7 @@ pub fn drag_strip(ui: &Ui, rect: Rect, id: &str) -> egui::Response {
 
 /// How far in from the window's right edge a scroll bar there sits, clear of the edge
 /// that resizes the window.
+#[allow(dead_code)]
 pub fn edge_inset() -> f32 {
     if custom() { EDGE } else { 0.0 }
 }

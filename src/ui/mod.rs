@@ -147,6 +147,14 @@ pub enum Action {
     PlaySpotifyPlaylist(Vec<crate::transfer::spotify::Track>, usize),
     /// Display a floating toast banner with message.
     Toast(String),
+    /// Block a song permanently (dislikes on YouTube and skips in playback).
+    BlockTrack(Track),
+    /// Block an artist permanently.
+    BlockArtist(String, String),
+    /// Unblock a previously blocked track.
+    UnblockTrack(String),
+    /// Unblock a previously blocked artist.
+    UnblockArtist(String),
 }
 
 enum Dialog {
@@ -561,6 +569,8 @@ pub struct App {
     pub spotify_loaded_playlist: Arc<std::sync::Mutex<Option<(crate::transfer::spotify::Source, Result<crate::transfer::spotify::Playlist, String>)>>>,
     pub spotify_cache: Arc<std::sync::Mutex<std::collections::HashMap<String, Track>>>,
     pub bg_actions: Arc<std::sync::Mutex<Vec<Action>>>,
+    pub blocked_tracks: std::collections::HashMap<String, crate::model::BlockedTrack>,
+    pub blocked_artists: std::collections::HashMap<String, crate::model::BlockedArtist>,
     dialog: Option<Dialog>,
     share_pending: Option<String>,
     smoke: Option<String>,
@@ -809,6 +819,8 @@ impl App {
             spotify_loaded_playlist: Arc::new(Mutex::new(None)),
             spotify_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
             bg_actions: Arc::new(Mutex::new(Vec::new())),
+            blocked_tracks: get("blocked_tracks").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
+            blocked_artists: get("blocked_artists").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
             dialog: None,
             share_pending: None,
             smoke: None,
@@ -1145,6 +1157,132 @@ impl App {
 
     fn toast(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), -1.0));
+    }
+
+    /// The name and target of the currently playing context (Playlist, Album, or Liked Music),
+    /// matching Spotify desktop header behavior.
+    pub fn playing_context(&self) -> Option<(String, Option<Target>)> {
+        if let Some((entry, _, _)) = &self.spotify_selected {
+            return Some((entry.name.clone(), None));
+        }
+
+        let curr_track = self.shown().or_else(|| self.current());
+
+        match &self.queue_source {
+            Some(Target::Playlist(id)) if id == LIKED_MUSIC => {
+                Some(("Liked Music".to_string(), Some(Target::Playlist(id.clone()))))
+            }
+            Some(Target::Playlist(id)) => {
+                if let Some(o) = self.opened(id) {
+                    Some((o.c.title.clone(), Some(Target::Playlist(id.clone()))))
+                } else if let Some(lib) = &self.library {
+                    if let Some(c) = lib.playlists.iter().find(|c| c.target == Target::Playlist(id.clone())) {
+                        Some((c.title.clone(), Some(Target::Playlist(id.clone()))))
+                    } else {
+                        Some(("Playlist".to_string(), Some(Target::Playlist(id.clone()))))
+                    }
+                } else {
+                    Some(("Playlist".to_string(), Some(Target::Playlist(id.clone()))))
+                }
+            }
+            Some(Target::Album(id)) => {
+                if let Some(o) = self.opened(id) {
+                    Some((o.c.title.clone(), Some(Target::Album(id.clone()))))
+                } else if let Some(lib) = &self.library {
+                    if let Some(c) = lib.albums.iter().find(|c| c.target == Target::Album(id.clone())) {
+                        Some((c.title.clone(), Some(Target::Album(id.clone()))))
+                    } else if let Some(t) = curr_track && let Some(a) = &t.album {
+                        Some((a.name.clone(), Some(Target::Album(id.clone()))))
+                    } else {
+                        Some(("Album".to_string(), Some(Target::Album(id.clone()))))
+                    }
+                } else if let Some(t) = curr_track && let Some(a) = &t.album {
+                    Some((a.name.clone(), Some(Target::Album(id.clone()))))
+                } else {
+                    Some(("Album".to_string(), Some(Target::Album(id.clone()))))
+                }
+            }
+            Some(Target::Artist(id)) => {
+                if let Some(o) = self.opened(id) {
+                    Some((o.c.title.clone(), Some(Target::Artist(id.clone()))))
+                } else if let Some(t) = curr_track {
+                    Some((t.artist_line(), Some(Target::Artist(id.clone()))))
+                } else {
+                    Some(("Artist".to_string(), Some(Target::Artist(id.clone()))))
+                }
+            }
+            None => {
+                if let Some(t) = curr_track && let Some(a) = &t.album && !a.name.is_empty() {
+                    let target = a.id.as_ref().map(|id| Target::Album(id.clone()));
+                    Some((a.name.clone(), target))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether a track or its artist is in the local blocklist.
+    pub fn is_track_blocked(&self, t: &Track) -> bool {
+        if self.blocked_tracks.contains_key(&t.id) {
+            return true;
+        }
+        for a in &t.artists {
+            if let Some(id) = &a.id {
+                if self.blocked_artists.contains_key(id) {
+                    return true;
+                }
+            }
+            if self.blocked_artists.contains_key(&a.name) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Permanently block a track: sends dislike to YouTube Music and skips if currently playing.
+    pub fn block_track(&mut self, t: Track) {
+        if self.logged_in {
+            self.backend.request(crate::backend::Req::Dislike(t.id.clone()));
+        }
+        let title = t.title.clone();
+        let blocked = crate::model::BlockedTrack {
+            id: t.id.clone(),
+            title: t.title.clone(),
+            artist: t.artist_line(),
+            thumb: t.thumbs.first().map(|th| th.url.clone()),
+        };
+        self.blocked_tracks.insert(t.id.clone(), blocked);
+        self.toast(format!("\"{}\" blockiert & übersprungen", title));
+        if self.current_id() == Some(&t.id) {
+            self.next();
+        }
+    }
+
+    /// Unblock a previously blocked track.
+    pub fn unblock_track(&mut self, id: &str) {
+        if let Some(t) = self.blocked_tracks.remove(id) {
+            self.toast(format!("\"{}\" entblockt", t.title));
+        }
+    }
+
+    /// Permanently block an artist: skips current track if it matches.
+    pub fn block_artist(&mut self, id: String, name: String) {
+        self.blocked_artists.insert(id.clone(), crate::model::BlockedArtist { id, name: name.clone() });
+        self.toast(format!("Künstler \"{}\" blockiert", name));
+        if let Some(curr) = self.current() {
+            if self.is_track_blocked(curr) {
+                self.next();
+            }
+        }
+    }
+
+    /// Unblock a previously blocked artist.
+    pub fn unblock_artist(&mut self, id: &str) {
+        if let Some(a) = self.blocked_artists.remove(id) {
+            self.toast(format!("Künstler \"{}\" entblockt", a.name));
+        }
     }
 
     pub fn sync_remote(&mut self) {
@@ -1653,6 +1791,8 @@ impl eframe::App for App {
         storage.set_string("crossfade_secs", self.crossfade_secs.to_string());
         storage.set_string("show_roman", b(self.show_roman));
         storage.set_string("show_trans", b(self.show_trans));
+        storage.set_string("blocked_tracks", serde_json::to_string(&self.blocked_tracks).unwrap_or_default());
+        storage.set_string("blocked_artists", serde_json::to_string(&self.blocked_artists).unwrap_or_default());
         // Background test runs mustn't change the listener's sources or per-song picks.
         if std::env::var_os("YTM_BACKGROUND").is_none() || std::env::var_os("YTM_SAVE_SESSION").is_some() {
             self.lyric_prefs.save(storage);

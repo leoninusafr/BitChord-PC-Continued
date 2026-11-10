@@ -13,9 +13,14 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
     let track = app.shown().cloned().or_else(|| app.current().cloned());
     let accent = app.accent_color();
 
-    // Top Header: "Now Playing" + subtle rounded glass close button
+    // Context Header: Spotify-style Playlist/Album name (or "Now Playing" if none) + close button
+    let context_info = app.playing_context();
+    let (header_title, header_target) = match &context_info {
+        Some((title, target)) => (title.as_str(), target.clone()),
+        None => ("Now Playing", None),
+    };
+
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Now Playing").font(theme::bold(18.0)).color(theme::text()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(super::titlebar::right_gap(ui.ctx(), ui.max_rect(), 0.0));
             let (c_rect, c_resp) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
@@ -26,6 +31,28 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
             if c_resp.clicked() {
                 app.details_open = false;
             }
+
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let avail_w = (ui.available_width() - 8.0).max(10.0);
+                let (h_box, _) = ui.allocate_exact_size(vec2(avail_w, 24.0), Sense::hover());
+                let is_link = header_target.is_some();
+                let (_, h_resp) = super::widgets::marquee_title(
+                    ui,
+                    ui.scope_id().with("details-header-title"),
+                    h_box,
+                    header_title,
+                    theme::bold(18.0),
+                    theme::text(),
+                    false,
+                    is_link,
+                );
+                if let Some(target) = header_target {
+                    let h_resp = h_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if h_resp.clicked() {
+                        app.actions.push(Action::Open(target));
+                    }
+                }
+            });
         });
     });
     ui.add_space(10.0);
@@ -51,19 +78,29 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
             let cover_x = ui.cursor().left() + (width - cover_size) / 2.0;
             let cover_rect = Rect::from_min_size(pos2(cover_x, ui.cursor().top()), Vec2::splat(cover_size));
             let (_, cover_resp) = ui.allocate_exact_size(Vec2::splat(cover_size), Sense::click());
-            let cover_resp = cover_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            let has_album = t.album.as_ref().and_then(|a| a.id.as_ref()).is_some();
+            let cover_resp = if has_album {
+                cover_resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+            } else {
+                cover_resp
+            };
             super::widgets::soft_shadow(ui, cover_rect, 10.0, 18.0, 0.45);
             super::widgets::paint_cover_xfade(ui, egui::Id::unique("details-cover"), cover_rect, &t.thumbs, 10.0, 1.0);
             let liked = app.liked.contains(&t.id);
             egui::Popup::context_menu(&cover_resp).show(|ui| {
                 super::widgets::song_menu(ui, &t, liked, None, None, &mut app.actions);
             });
+            if cover_resp.clicked() {
+                if let Some(album) = &t.album && let Some(id) = &album.id {
+                    app.actions.push(Action::Open(Target::Album(id.clone())));
+                }
+            }
             ui.add_space(14.0);
 
             // 2. Title & Favorite Heart on same horizontal baseline (Spotify style)
             ui.horizontal(|ui| {
-                let heart_w = 32.0;
-                let title_w = (width - heart_w - 8.0).max(10.0);
+                let action_w = 64.0;
+                let title_w = (width - action_w - 8.0).max(10.0);
 
                 let (title_box, _) = ui.allocate_exact_size(vec2(title_w, 24.0), Sense::hover());
                 let (_, title_resp) = super::widgets::marquee_title(
@@ -76,9 +113,19 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
                     app.playing(),
                     true,
                 );
+                let title_resp = if has_album {
+                    title_resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+                } else {
+                    title_resp
+                };
                 egui::Popup::context_menu(&title_resp).show(|ui| {
                     super::widgets::song_menu(ui, &t, liked, None, None, &mut app.actions);
                 });
+                if title_resp.clicked() {
+                    if let Some(album) = &t.album && let Some(id) = &album.id {
+                        app.actions.push(Action::Open(Target::Album(id.clone())));
+                    }
+                }
 
                 let (btn_r, hresp) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
                 let hresp = named(hresp, if liked { "Remove from favorites" } else { "Add to favorites" })
@@ -89,6 +136,22 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
                 glyphs::draw(ui, btn_r.center(), 20.0 + pop * 3.0, if liked { glyphs::HEART_FILLED } else { glyphs::HEART }, icon_fg);
                 if hresp.clicked() {
                     app.actions.push(Action::Like(t.clone(), !liked));
+                }
+
+                // Block button (⊖ Minus Circle)
+                let is_blocked = app.blocked_tracks.contains_key(&t.id);
+                let (b_rect, b_resp) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
+                let b_resp = named(b_resp, if is_blocked { "Song entblocken" } else { "Song blockieren" })
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                let bh = theme::anim_bool(ui.ctx(), b_resp.id.with("bh"), b_resp.hovered(), 0.15);
+                let b_fg = if is_blocked { Color32::from_rgb(239, 68, 68) } else { theme::lerp_color(theme::text_dim(), theme::text(), bh) };
+                super::widgets::draw_minus_circle(ui, b_rect.center(), 8.5, b_fg, 1.3);
+                if b_resp.clicked() {
+                    if is_blocked {
+                        app.actions.push(Action::UnblockTrack(t.id.clone()));
+                    } else {
+                        app.actions.push(Action::BlockTrack(t.clone()));
+                    }
                 }
             });
 

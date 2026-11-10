@@ -291,6 +291,15 @@ impl App {
     /// `report`: a new play for the account's history (not picking up last session's song).
     pub(super) fn play_current_at(&mut self, at: Duration, report: bool) {
         let Some(track) = self.current().cloned() else { return };
+        if self.is_track_blocked(&track) {
+            log::info!("Skipping blocked track: {} ({})", track.title, track.id);
+            if self.queue.advance() {
+                self.play_current_at(Duration::ZERO, true);
+            } else {
+                self.audio.send(AudioCmd::Stop);
+            }
+            return;
+        }
         // A natural Automix handoff keeps the outgoing song on screen until the next one
         // is louder (see `MixFrom`); any other play switches at once.
         let mixing = self.pending_mix.is_some();

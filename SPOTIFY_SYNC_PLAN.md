@@ -1,130 +1,119 @@
 # BitChord PC – Spotify Integration & Two-Way Sync Architektur
 
-Dieses Dokument beschreibt die genaue Architektur und das Konzept für die vollständige Zwei-Wege-Synchronisation zwischen BitChord (YouTube Music) und Spotify – inklusive kollaborativer Playlists, fremder Playlists, Metadaten-Sync (Titel & Cover) und Rechteverwaltung.
+Dieses Dokument beschreibt die vollständige Architektur und das Konzept für den **Zwei-Wege-Sync** zwischen BitChord (YouTube Music Engine) und Spotify – inklusive kollaborativer Playlists, dynamischer Mixtapes ("Dein Mixtape 2"), Einladungslinks für Freunde, Metadaten-Sync (Titel & Cover) und Rechteverwaltung.
 
 ---
 
-## 1. Aktueller Status: Was ist bereits synchronisiert?
+## 1. Leitprinzip: 100% Parität zu nativem Spotify
 
-### A. Gelikete Songs (Favoriten) – Live & Bidirektional
-- **Verhalten**: Klick auf das **Herz-Icon** in BitChord übermittelt den Titel sofort im Hintergrund an die Spotify Web-API (`sync_like_to_spotify`).
-- **Ergebnis**: Der Song wird in deiner echten Spotify-Bibliothek unter *„Lieblingssongs“* gespeichert. Bei erneutem Klick wird der Like auf Spotify wieder entfernt.
-
-### B. Playlists von Spotify in BitChord anzeigen
-- **Verhalten**: Auf Spotify erstellte und gefolgte Playlists werden ausgelesen und in der linken Seitenleiste mit dem Spotify-Symbol aufgelistet.
-- **Ergebnis**: Playlists können direkt in BitChord gestreamt werden; Titel werden on-the-fly mit YouTube Music in bester Audioqualität gematcht.
+> **Ziel**: Wenn der Two-Way-Sync aktiviert ist, verhält sich BitChord für dein Spotify-Konto exakt so, als ob du die offizielle Spotify Desktop-App verwenden würdest.
+> Jede Änderung (Song hinzufügen, löschen, umbenennen, Cover anpassen, Kollaborationen) wird nahtlos und in Echtzeit zwischen beiden Welten synchronisiert.
 
 ---
 
 ## 2. Playlists-Kategorien & Berechtigungsmodell
 
-In Spotify existieren drei grundlegend verschiedene Arten von Playlists, die BitChord sauber unterscheiden muss:
+BitChord unterscheidet clientseitig sauber zwischen drei Playlist-Typen:
 
 ```
-                  ┌────────────────────────────────────────┐
-                  │          Spotify Playlists             │
-                  └──────────────────┬─────────────────────┘
-                                     │
-           ┌─────────────────────────┼─────────────────────────┐
-           ▼                         ▼                         ▼
-   [ 1. Eigene Playlist ]   [ 2. Geteilte / Kollaborativ ]   [ 3. Fremde / Gefolgt ]
-   owner.id == my_id         collaborative == true           owner.id != my_id
-   Voller Lese- & Schreib-   Mehrere Personen können         Reiner Lesezugriff (Read-Only)
-   zugriff (Titel, Cover,    Songs hinzufügen/löschen        Updates des Erstellers werden
-   Songs add/remove)         Attribut: 'Added by [User]'     nur empfangen (One-Way)
+                          ┌────────────────────────────────────────┐
+                          │          Spotify Playlists             │
+                          └──────────────────┬─────────────────────┘
+                                             │
+      ┌──────────────────────────────────────┼──────────────────────────────────────┐
+      ▼                                      ▼                                      ▼
+[ 1. Eigene Playlists ]             [ 2. Kollaborativ ]                    [ 3. Fremd / Algorithmisch ]
+• Ersteller: Du                     • Ersteller: Du oder Freund            • "Dein Mixtape 2", Top 50, etc.
+• Vollzugriff: Songs, Titel,        • Jeder Mitwirkende darf Songs         • Nur in Bibliothek, wenn geliked (+)
+  Beschreibung, Cover                 hinzufügen & entfernen               • Reiner Lesezugriff (Read-Only)
+• Live-Sync in beide Richtungen     • 'Added by [Name]' für jeden Track    • Auto-Update, wenn Spotify ändert
 ```
 
 ---
 
-## 3. Geteilte & Kollaborative Playlists (Collaborative Playlists)
+## 3. Geteilte & Kollaborative Playlists (Collaborative Sync)
 
-### A. Das Szenario:
-- Du hast eine Playlist auf Spotify, die du mit Freunden oder der Familie teilst.
-- Freunde fügen auf Spotify neue Songs hinzu oder löschen Songs.
-- Du fügst in BitChord Songs hinzu oder löschst Songs.
+### A. Wie funktioniert die Zusammenarbeit?
+- **Freund löscht Song auf Spotify** $\to$ Der Song verschwindet automatisch auch in deiner BitChord-Playlist.
+- **Leon löscht Song in BitChord** $\to$ BitChord sendet den Löschbefehl atomar an die Spotify-API (`DELETE /v1/playlists/{id}/tracks` mit `snapshot_id`). Der Song ist sofort auch auf Spotify für alle Freunde weg.
+- **Freund fügt Song auf Spotify hinzu** $\to$ BitChord erkennt den neuen Track, matcht ihn für YouTube Music und zeigt ihn mit dem Badge *"Added by [Freund]"* an.
+- **Leon fügt Song in BitChord hinzu** $\to$ BitChord ermittelt die Spotify-ID und pusht den Track sofort auf Spotify (`POST /v1/playlists/{id}/tracks`).
+- **Neuer Kollaborateur tritt bei** $\to$ Die Mitwirkenden-Liste in BitChord aktualisiert sich automatisch.
 
-### B. Die technische Lösung (Delta-Sync & Snapshot-IDs):
-1. **Kein blindes Überschreiben (Snapshot-ID Tracking)**:
-   - Spotify nutzt für jede Playlist eine eindeutige `snapshot_id` (z. B. `MSwxMjM0NWFiY...`).
-   - BitChord speichert die letzte bekannte `snapshot_id`.
-   - Bei jeder Änderung vergleicht BitChord die lokale Snapshot-ID mit der von Spotify:
-     - Hat sich die Snapshot-ID geändert, zieht BitChord zuerst die Änderungen der Freunde ab (Delta-Update).
-     - Erst danach wird deine lokale Änderung (`add` oder `remove`) als atomare Operation an Spotify gesendet.
-     - **Ergebnis**: Niemals werden Änderungen von Freunden versehentlich überschrieben oder gelöscht!
-2. **„Added by [Name]“-Attributierung**:
-   - Die Spotify Web-API liefert für jeden Track das Feld `added_by`:
-     ```json
-     "added_by": {
-       "id": "friend_user_id",
-       "display_name": "Sarah"
-     }
-     ```
-   - In BitChord wird in der Songzeile dezent angezeigt:
-     `Titel • Interpret • Added by Sarah`
-     *(Das `added_by`-Feld ist in BitChords `RowOpts` bereits architektonisch vorbereitet!)*
-3. **Song in geteilter Playlist löschen**:
-   - Wenn du einen Song entfernst, sendet BitChord `DELETE /v1/playlists/{id}/tracks` mit `snapshot_id` an Spotify.
-   - Der Song verschwindet sowohl in BitChord als auch bei deinen Freunden auf Spotify.
+### B. Schutz vor Konflikten (Snapshot-ID Delta-Sync):
+- Spotify vergibt bei jeder Playlist-Änderung eine neue `snapshot_id`.
+- Vor jedem Schreibvorgang prüft BitChord, ob die lokale `snapshot_id` noch aktuell ist.
+- Wurde die Playlist zwischenzeitlich von einem Freund geändert, zieht BitChord zuerst im Millisekundenbereich das Delta (die Änderungen des Freundes) ab und wendet erst danach deine Aktion an.
+- **Ergebnis**: Kein Überschreiben oder versehentliches Löschen von fremden Beiträgen.
 
 ---
 
-## 4. Fremde / Gelikte Playlists (Followed / Read-Only Playlists)
+## 4. Algorithmische & Fremde Playlists ("Dein Mixtape 2" / "Daily Mix")
 
-### A. Das Szenario:
-- Du hast auf Spotify eine Playlist geliked (z. B. *„Today's Top Hits“* von Spotify oder eine Playlist von einem Freund/Künstler).
-- Du hast auf Spotify **keine Schreibrechte** (`owner.id != my_id` und `collaborative == false`).
-
-### B. Das Verhalten in BitChord:
-1. **Schreibschutz & Deaktivierte Buttons**:
-   - In BitChord wird die Playlist als schreibgeschützt markiert.
-   - Der Button „Songs hinzufügen“ oder „Aus Playlist entfernen“ ist deaktiviert oder blendet einen informativen Tooltip ein:
-     `„This is a followed playlist created by [Owner]. You cannot modify it on Spotify.“`
-2. **Automatischer One-Way-Sync**:
-   - Wenn der Ersteller auf Spotify neue Songs hinzufügt oder die Reihenfolge ändert, lädt BitChord diese Änderungen beim Sync/Start automatisch nach.
-3. **Ersteller-Anzeige**:
-   - Im Header steht klar: `By Spotify • 50 songs` oder `By Max • 34 songs`.
+### A. Das Verhalten bei dynamischen Spotify-Mixes:
+- **Speicher-Filter (Bibliotheks-Regel)**:
+  - Nur Playlists, die du in deiner Spotify-Bibliothek mit dem **Plus (`+`)** markiert hast (z. B. *"Dein Mixtape 2"*), erscheinen in BitChord.
+  - Mixes, die du nicht in deiner Bibliothek hast (z. B. *"Dein Mixtape 3"*), tauchen gar nicht erst auf.
+- **Algorithmische Auto-Updates**:
+  - Spotify verändert den Inhalt von *"Dein Mixtape"* regelmäßig automatisch.
+  - BitChord aktualisiert den Inhalt im Hintergrund (One-Way Sync von Spotify zu BitChord), sobald Spotify neue Songs einsteuert.
+- **Schreibschutz**:
+  - Da Spotify bei algorithmischen Mixen keine manuellen Änderungen erlaubt, ist der "Hinzufügen"- und "Löschen"-Button in BitChord für diese Playlists ausgegraut, mit klarem Hinweis:
+    *„Von Spotify für dich erstellt – keine manuelle Bearbeitung möglich.“*
 
 ---
 
-## 5. Playlist-Titel & Cover ändern (Metadaten-Synchronisation)
+## 5. Spotify-Teilen & Freunde einladen ("Spotify Kollaborateur hinzufügen")
 
-### A. Titel & Beschreibung ändern:
-- **Eigene / Kollaborative Playlists**:
-  - Wenn du in BitChord auf den Stift klickst und den Namen oder die Beschreibung änderst:
-    BitChord sendet `PUT /v1/playlists/{playlist_id}` mit `{ "name": "Neuer Name", "description": "..." }` an Spotify.
-    Wenige Sekunden später heißt die Playlist auch auf Spotify und bei allen Mitwirkenden so.
-- **Fremde Playlists**:
-  - Der Edit-Stift ist ausgegraut, da man auf Spotify fremde Playlists nicht umbenennen darf.
-- **Umgekehrt (Änderung auf Spotify)**:
-  - Wenn du oder ein Freund auf Spotify den Namen ändert, übernimmt BitChord beim nächsten automatischen Refresh den neuen Namen.
+### Das Szenario:
+Du erstellst eine Playlist in BitChord und möchtest sie mit einem Freund teilen, der **nur die normale Spotify-App** (am Handy oder PC) nutzt:
 
-### B. Playlist-Cover ändern:
-- **Eigene Playlists**:
-  - Wenn du in BitChord ein neues Bild als Cover auswählst:
-    BitChord skaliert das Bild auf maximal 640×640 px JPEG und sendet es per `PUT /v1/playlists/{playlist_id}/images` (Base64-kodiert) an die Spotify-API.
-    Auf Spotify erscheint sofort dein neues Custom-Cover!
-- **Fremde Playlists**:
-  - Cover-Upload ist gesperrt; BitChord cached und zeigt immer das aktuelle offizielle Cover des Erstellers.
-- **Umgekehrt (Cover auf Spotify geändert)**:
-  - BitChord aktualisiert den Cover-Cache automatisch, sobald die Spotify-API eine neue Bild-URL meldet.
+1. **„Spotify Link teilen“**:
+   - Im Teilen-Menü der Playlist wählst du: `[🔗 Spotify-Link kopieren]`.
+   - Erzeugt die offizielle URL `https://open.spotify.com/playlist/{id}`.
+2. **„Spotify-Kollaborateur einladen“**:
+   - BitChord ruft die Spotify API auf und erzeugt einen sicheren Kollaborations-Einladungslink (`open.spotify.com/playlist/{id}?si=...&pt=...`).
+   - Du schickst diesen Link deinem Freund (z. B. via WhatsApp, Discord oder Mail).
+   - **Dein Freund klickt drauf**: Die normale Spotify-App öffnet sich, er tritt bei und kann sofort Songs beisteuern.
+   - **Du nutzt weiterhin BitChord**: Alle Songs, die dein Freund hinzufügt, landen live bei dir in BitChord!
 
 ---
 
-## 6. Sicherheit, Warnhinweise & Opt-In Schalter
+## 6. Metadaten-Sync: Titel, Beschreibung & Cover
 
-Wie vom Nutzer gefordert, wird die Synchronisation niemals heimlich oder destruktiv scharfgeschaltet:
+### A. Titel & Beschreibung:
+- **Änderung in BitChord**: Titel im Header anklicken, neuen Namen eintippen $\to$ BitChord sendet `PUT /v1/playlists/{id}` an Spotify.
+- **Änderung auf Spotify**: Wird sofort beim nächsten Refresh in BitChord übernommen.
+- **Rechte-Prüfung**: Bei fremden Playlists ist die Umbenennung gesperrt.
 
-1. **Dedizierter Umschalter in Settings (`Settings > Spotify`)**:
-   - Standardmäßig: `[ ] Read-Only Sync (Playlists nur anzeigen und abspielen)`.
-   - Optional: `[x] Enable Full 2-Way Sync (Änderungen live mit Spotify abgleichen)`.
-2. **Warnhinweis beim ersten Aktivieren**:
-   > **Achtung – Vollständiger Zwei-Wege-Sync**:
-   > Alle Änderungen, die du an deinen eigenen und kollaborativen Playlists in BitChord vornimmst (Songs hinzufügen, löschen, Titel ändern), werden direkt auf dein Spotify-Konto übertragen.
-3. **Playlist-Ausschluss ("Nicht synchronisieren")**:
-   - Für jede Playlist kann im Kontextmenü (Rechtsklick) festgelegt werden:
-     `[x] Do not sync this playlist to Spotify`.
-   - Damit lassen sich private YouTube-Listen führen, die niemals auf Spotify landen sollen.
+### B. Cover-Verhalten:
+- **Neues Cover hochladen**:
+  - Bild auswählen in BitChord $\to$ BitChord komprimiert auf max. 640×640 px JPEG und sendet es per `PUT /v1/playlists/{id}/images` (Base64) an Spotify.
+  - Auf Spotify erscheint sofort dein neues Custom-Cover.
+- **Bestehendes Cover ändern**:
+  - Überschreibt das alte Cover auf Spotify und leert den lokalen Cache.
+- **Cover löschen**:
+  - Löscht das Custom-Cover auf Spotify $\to$ Spotify stellt automatisch das klassische 4er-Mosaik der ersten Tracks wieder her. BitChord übernimmt ebenfalls sofort das 4er-Mosaik.
+- **Cover auf Spotify geändert**:
+  - BitChord erkennt die geänderte Bild-URL in der API und blendet das neue Artwork flüssig ein.
 
 ---
 
-*Status: Vollständige Konzeption und Architektur dokumentiert. Bleibt im Plan, bis zur Umsetzung.*
+## 7. Sicherheit, Warnhinweise & Opt-In
+
+Um maximale Kontrolle und Datenschutz zu gewährleisten:
+
+1. **Umschalter in Settings (`Settings > Spotify`)**:
+   - `[ ] Read-Only Sync (Playlists nur anzeigen und anhören)` (Standard)
+   - `[x] Full Two-Way Sync (Änderungen live mit Spotify synchronisieren)`
+2. **Warnhinweis beim Einschalten**:
+   > **Achtung – Vollständiger Zwei-Wege-Sync aktiv**:
+   > Alle Änderungen an deinen eigenen und geteilten Playlists (Hinzufügen, Entfernen, Titel, Cover) werden direkt auf dein Spotify-Konto übertragen.
+3. **Blacklist / Playlist-Ausschluss ("Nicht synchronisieren")**:
+   - Per Rechtsklick auf eine beliebige Playlist:
+     `[x] Diese Playlist nicht mit Spotify synchronisieren`.
+   - Schützt private YouTube-Listen davor, jemals auf Spotify zu landen.
+
+---
+
+*Status: Vollständiges Gesamtkonzept dokumentiert. Zur späteren schrittweisen Implementierung vorgemerkt.*

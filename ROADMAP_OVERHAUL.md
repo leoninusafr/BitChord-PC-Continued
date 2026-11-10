@@ -268,14 +268,24 @@ Die Extension von **TechShivvy** und **Hitesh1090** nutzt einen genialen Mechani
   - Spotify Playlists zeigen statt nur generisch „Spotify“ nun: `Leon’s Spotify` (bzw. `[Username]’s Spotify`).
 - **HQ-Cover für Spotify Playlists**:
   - Immer das größte verfügbare Cover (`images[0].url`, 640×640 px) cachen und rendern.
-- **2-Wege Playlist-Sync mit Opt-In Schalter (Entscheidung)**:
-  - In den Einstellungen (`Settings › Spotify`) wird ein dedizierter Umschalter integriert:
-    `[ ] Enable 2-Way Playlist Sync with Spotify`
-  - **Sicherheits-Grund**: Nicht sofort standardmäßig scharfgeschaltet, damit der Nutzer die volle Kontrolle behält und keine ungewollten Playlist-Duplikate entstehen.
-  - **Wenn aktiv**: 
-    - Auf Spotify am PC/Handy erstellte Playlists erscheinen automatisch in BitChord.
-    - In BitChord hinzugefügte oder entfernte Songs werden über die Spotify Web-API direkt live auf Spotify synchronisiert.
-  - **Wenn inaktiv**: Read-Only Anzeige (Playlists werden dargestellt und gestreamt, aber nicht verändert).
+- **Vollständiger 2-Wege-Sync (100% Spotify-Parität)**:
+  - In den Einstellungen (`Settings › Spotify`) wird der Umschalter integriert:
+    `[x] Enable Full 2-Way Sync with Spotify` (mit deutlichem Warnhinweis vor dem Scharfschalten).
+  - **Kollaborative Playlists**:
+    - Wenn Freunde auf Spotify Songs hinzufügen oder löschen, aktualisiert sich BitChord live.
+    - Wenn der Nutzer in BitChord Songs hinzufügt oder löscht, wird dies sofort via Spotify-API auf Spotify übertragen.
+    - Konfliktfreier Delta-Sync über Spotify `snapshot_id` (kein gegenseitiges Überschreiben).
+    - Attributierung *"Added by [Freund]"* für jeden Mitwirkenden.
+  - **Dynamische & Algorithmische Playlists ("Dein Mixtape 2" / "Daily Mix")**:
+    - Nur in der Spotify-Bibliothek gespeicherte Mixes (`+`) tauchen in BitChord auf (ungespeicherte wie Mixtape 3 bleiben verborgen).
+    - Automatische Aktualisierung, sobald Spotify den Inhalt ändert. Schreibschutz für algorithmische Playlists.
+  - **Spotify-Kollaborationslinks ("Freunde einladen")**:
+    - Im Teilen-Menü: `[🔗 Spotify-Link teilen]` und `[+] Spotify-Kollaborateur einladen`.
+    - Freunde öffnen den Link in ihrer normalen Spotify-App und arbeiten mit, während der Nutzer in BitChord bleibt!
+  - **Metadaten-Sync (Titel & Cover)**:
+    - Titel-, Beschreibungs- und Cover-Änderungen (inkl. Erstellung, Upload, Löschung und Rückfall auf 4er-Mosaik) synchronisieren sich nahtlos bidirektional.
+  - **Playlist-Ausschluss**:
+    - Einzelne Playlists können per Rechtsklick von der Synchronisation ausgeschlossen werden (`Do not sync this playlist`).
 
 ---
 
@@ -576,21 +586,21 @@ Die Extension von **TechShivvy** und **Hitesh1090** nutzt einen genialen Mechani
 
 ## Zukünftige Feature-Konzepte & Research
 
-### Step 35: Echter Song- & Artist-Blocker ("Diesen Song/Künstler nie wieder spielen")
+## Step 35: Echter Song- & Artist-Blocker ("Diesen Song/Künstler nie wieder spielen") — UMSETZUNG IN v2.1.0
 
-- **Problem & Ist-Zustand**:
-  - Der bisherige `Dislike`-Button sendet lediglich einen Thumbs-down an YouTube Music. Der Song kann aber weiterhin in Playlists, im Automix oder über Radios abgespielt werden.
-- **Konzept für echtes Spotify-Style Blocking**:
-  - **Icon-Design**: Kreis mit horizontalem Minus-Balken (`⊖` / `MINUS_CIRCLE`), exakt wie das bekannte Spotify-Blockiersymbol.
-  - **Zweifach-Aktion beim Klick**:
-    1. Sendet den Dislike-Befehl an YouTube Music (`Req::Dislike`), damit auch Google den Track negativ bewertet.
-    2. Trägt die ID in die lokale BitChord-Sperrliste ein (`blocked_tracks` / `blocked_artists`).
-  - **Aktives Überspringen**: Sobald der Player in einer Playlist, im Radio, Mix oder Shuffeln auf einen geblockten Titel oder Künstler stößt, überspringt BitChord ihn sofort und nahtlos (*„Skipped blocked song: {title}“*).
-  - **Such- & Entblockungs-Verhalten**:
-    - Wenn der Nutzer explizit nach einem geblockten Song oder Künstler sucht, taucht dieser normal auf, erhält aber ein dezentes Badge *„Blocked“* und einen *„Unblock“*-Button.
-  - **Verwaltung in den Einstellungen (Keine störende Extra-Playlist)**:
-    - Um die Bibliothek aufgeräumt zu halten, gibt es keine extra Playlist, sondern einen übersichtlichen Bereich in **Settings > Playback > Blocked Content (Blockierte Inhalte)**.
-    - Zeigt alle blockierten Titel und Künstler mit Cover, Name und einem Klick zum Entblocken.
+- **Umsetzung**:
+  - **Minus-Circle-Icon (`⊖`)**:
+    - Mathematisch exakt per egui Painter gezeichnet (`draw_minus_circle`), gestochen scharf ohne Artefakte.
+    - Im rechten Details-Panel direkt neben dem Favoriten-Herz auf der Titelzeile platziert.
+    - In Kontextmenüs (Drei-Punkte-Menü `⋯` und Rechtsklick) für jeden Song („Song blockieren“) und Interpreten („Künstler „[Name]“ blockieren“).
+  - **Zweifach-Aktion**:
+    - Sendet bei eingeloggtem Account automatisch Dislike an YouTube Music.
+    - Speichert Track-ID bzw. Artist-ID in lokaler persistenter Sperrliste (`blocked_tracks`, `blocked_artists`).
+  - **Aktives Überspringen in Echtzeit**:
+    - Sobald ein blockierter Song im Automix, Radio, Shuffle oder in Playlists aufgerufen wird, überspringt `play_current_at` ihn sofort und nahtlos.
+    - Wird der aktuell spielende Song blockiert, schaltet BitChord sofort zum nächsten Song weiter.
+  - **Verwaltung in den Einstellungen**:
+    - In **Settings > Playback > Blockierte Inhalte** werden alle blockierten Titel und Künstler übersichtlich mit rotem `⊖`-Badge aufgelistet und können per 1-Klick-Button „Entblocken“ wieder freigegeben werden.
 
 ---
 
@@ -633,11 +643,11 @@ Die Extension von **TechShivvy** und **Hitesh1090** nutzt einen genialen Mechani
 
 ### Step 38: Mausrad-Lautstärke-Schrittweite & Feineinstellung (Spotify-Präzision)
 
-- **Problem & Analyse**:
-  - Aktuell teilt `app.audio.set_volume(vol + scroll / 500.0)` in `src/ui/shell.rs` das Mausrad-Delta durch 500.
-  - Bei typischen Mausrad-Rastern springt die Lautstärke um ca. **12 % pro Klick**. Bei Spotify sind es ca. **10 %**.
-  - **Geplante Anpassung**: Minimale Feinjustierung von bisher 12 % auf ca. 8–10 % pro Klick, um das exakte Spotify-Gefühl am Desktop zu treffen.
-  - **Status**: Vorerst nur dokumentiert, wird noch nicht umgesetzt.
+## Step 38: Mausrad-Lautstärke-Schrittweite & Feineinstellung — UMSETZUNG IN v2.1.0
+
+- **Umsetzung**:
+  - Im Player-Balken (`src/ui/shell.rs`) sowie im Mini-Player (`src/ui/mini.rs`) den Mausrad-Delta-Divisor von bisher `500.0` auf `1200.0` kalibriert.
+  - **Ergebnis**: Pro Mausrad-Tick ändert sich die Lautstärke um exakt **~5 %** (identisch zum Spotify Desktop-Verhalten), statt vorheriger zu grober 12 %-Sprünge.
 
 ---
 
@@ -652,71 +662,41 @@ Die Extension von **TechShivvy** und **Hitesh1090** nutzt einen genialen Mechani
     - Audio spielt auf dem jeweils aktiven Ausgabegerät; Steuerbefehle (Pause, Skip, Lautstärke) synchronisieren sich live über den sicheren WebSocket-Relay.
   - **Status**: Vorerst nur dokumentiert und recherchiert, wird noch nicht umgesetzt.
 
-### Step 40: Rechtes Details-Panel: Kontext-Header (Playlist-Name) & Album-Navigation per Klick auf Cover/Titel
+---
+
+## Step 40: Rechtes Details-Panel: Kontext-Header (Playlist-Name) & Album-Navigation — UMSETZUNG IN v2.1.0
 
 - **Kontext-Header oben im Seitenpanel**:
-  - Aktuell steht im Header des rechten Seitenpanels (`details_panel` in `src/ui/details.rs`) starr `"Now Playing"` / `"Aktueller Titel"`.
-  - **Spotify-Standard**:
-    - Spielt der Song aus einer Playlist oder einem Album, steht im Header der **Name der jeweiligen Playlist bzw. des Albums** (z. B. *"Leon's Favorites"*, *"Discover Weekly"* oder *"After Hours"*).
-    - Ist kein übergeordneter Kontext vorhanden (z. B. einzelner Song direkt aus der Suche gestartet), steht dort wie bisher neutral `"Now Playing"`.
+  - `App::playing_context()` ermittelt dynamisch den Namen der spielenden Playlist (z. B. *"Liked Music"*, *"Dein Mixtape 2"*, etc.) bzw. des Albums.
+  - Ist kein Kontext vorhanden, steht dort standardmäßig *"Now Playing"*.
+  - Ist der Header ein Kontext-Link (Playlist/Album), blendet sich bei Hover ein Unterstrich ein und ein Klick navigiert direkt zur Playlist oder zum Album (`Action::Open(target)`).
+  - Lange Titel laufen flüssig als Marquee, ohne den Close-Button zu bedrängen.
 - **Album-Navigation per Klick auf Cover & Songtitel**:
-  - **Klick auf das Album-Cover**:
-    - Klickt man mit der linken Maustaste auf das große Album-Cover im rechten Panel, öffnet BitChord direkt das Album des Songs (`Action::Open(Target::Album(id))`).
-    - Der Cursor signalisiert per Hand (`PointingHand`) die Klickbarkeit.
-  - **Klick auf den Songtitel & Hover-Unterstrich**:
-    - Der Songtitel im rechten Panel erhält bei Maus-Hover denselben dezenten Unterstrich wie die Interpreten-Links (`1.5px` unter der Baseline).
-    - Ein Klick auf den Songtitel führt ebenfalls direkt zur Album-Seite des Titels.
-### Step 41: Horizontale Shelves (Playlists/Alben): Direktes Drag- & Swipe-Scrolling (Mobile/Touch-Gefühl)
+  - **Klick auf das Album-Cover**: Linksklick auf das große Cover öffnet direkt die Album-Ansicht (`Action::Open(Target::Album(id))`). Cursor wechselt auf `PointingHand`.
+  - **Klick auf den Songtitel**: Linksklick auf den Songtitel öffnet ebenfalls direkt das Album. Bei Hover zeigt der Titel den Spotify-typischen dezenten Unterstrich.
 
-- **Problem & Bisheriges Verhalten**:
-  - In Bereichen wie *"From your library"*, *"Charts"*, *"Listen again"* oder *"Quick picks"* konnte man bisher nur zeilenweise über die kleinen Pfeile oben rechts (`‹` und `›`) von Seite zu Seite blättern.
-  - Das freie, intuitive Ziehen mit gedrückter Maustaste (wie auf dem Smartphone oder Touchpad) war am Desktop standardmäßig inaktiv (`DragScroll::OnTouch`).
-- **Umsetzung & Verhalten**:
-  - **Freies Drag & Swipe**:
-    - Man kann nun direkt auf jede Playlist, jedes Album oder jede Songzeile klicken und den Bereich mit gedrückter Maustaste flüssig nach links oder rechts ziehen (`DragScroll::Always`).
-    - Ausgestattet mit echter egui-Trägheitsphysik (Momentum/Release Velocity & Rubber-Banding an den Rändern) für ein butterweiches Smartphone-Gefühl am PC.
-  - **Präzise Klick- vs. Wisch-Trennung**:
-    - Ein normaler Klick ohne Wischen öffnet wie gewohnt sofort das Album bzw. die Playlist (`Action::Open`).
-    - Ein Wischen/Ziehen verhindert das versehentliche Starten oder Öffnen der Karte (`!is_decidedly_dragging`).
-  - **Gesten-Unterbrechbarkeit (Interruptibility)**:
-    - Wenn eine Pfeil-Animation läuft und der Nutzer die Leiste mit der Maus greift, bricht der automatische Glide sofort ab und folgt 1:1 dem Cursor.
-    - Pfeile und Wischen harmonieren perfekt: Nach einem Drag snappt ein Klick auf die Pfeile ausgehend von der aktuellen Position nahtlos zur nächsten vollen Ansicht.
-### Step 42: Titelbreite & Spacing-Harmonisierung (Hauptseite Quick Picks & Sidebar Scrollbar-Abstand)
+---
 
-- **Problem & Ursachenanalyse**:
-  1. **Hauptseite (Songzeilen / Quick picks)**:
-     - Bisher wurden in `track_row` pauschal über 103 Pixel am rechten Rand abgezogen (`right = rect.right() - 51.0` und `dur_w = 52.0`), selbst wenn der Song gar keine Zeitangabe hatte (`t.duration == None`).
-     - Dadurch wurden Songtitel in den 270 px breiten Spalten künstlich auf nur ~110 px eingeengt und brachen extrem früh mit `...` ab, gefolgt von einer riesigen leeren Lücke von fast 70 px bis zum Drei-Punkte-Menü.
-  2. **Linke Seitenleiste (Playlists)**:
-     - Das Padding am rechten Rand (`right_pad`) betrug nur 8 px. Lange Playlist-Namen liefen bis direkt an die vertikale Scrollbar heran, sodass die Auslassungspunkte `...` optisch fast die Scrollbar berührten.
-- **Umsetzung & Lösungen**:
-  - **Dynamische Breitenberechnung auf der Hauptseite**:
-    - Wenn keine Songdauer vorliegt (`t.duration == None`), nutzt der Titel den gesamten verfügbaren Platz bis kurz vor das Drei-Punkte-Menü (`rect.right() - 36.0`).
-    - **Ergebnis**: Über **65 Pixel mehr Platz** für Songtitel (+63 % Textbreite) auf der Home-Seite! Keine unruhigen Leerflächen mehr.
-  - **Subtiles Hover-Einblenden des Drei-Punkte-Menüs**:
-    - Das Menü-Icon (`icon::ELLIPSIS_VERTICAL`) blendet sich dezent per Alpha-Easing ein, sobald man über die Songzeile hovert (oder das Menü geöffnet ist), wodurch die Hauptseite ruhig und aufgeräumt wirkt.
-  - **20 px Sicherheitsabstand in der Seitenleiste**:
-    - `right_pad` für Playlist-Einträge von 8 px auf saubere 20 px (bzw. 36 px bei aktiver Wiedergabe mit Lautsprecher-Icon) vergrößert.
-    - Die Auslassungspunkte `...` halten stets einen eleganten Abstand zur Scrollbar.
-### Step 43: Scrollbar-Springen auf der Startseite & Seitenwechsel-Bounce ("Von oben runter")
+## Step 41: Horizontale Shelves (Playlists/Alben): Direktes Drag- & Swipe-Scrolling — UMSETZUNG IN v2.0.0
 
-- **1. Scrollbar springt nach rechts und links beim Scrollen auf der Startseite**:
-  - **Beobachtung**: Beim Herunterscrollen auf der Startseite verschwindet die Scrollbar manchmal kurz oder springt um ein paar Pixel nach rechts und wieder zurück.
-  - **Technische Ursache**:
-    - In `src/ui/pages.rs:55` addiert `ui.spacing_mut().scroll.bar_outer_margin += super::titlebar::edge_inset();` einen Offset.
-    - Gleichzeitig triggert beim Scrollen das Infinite-Loading (`HomeMore`), wodurch dynamisch Shelves nachgeladen werden.
-    - Egui schaltet bei `VisibleWhenNeeded` die Scrollbar ein/aus und berechnet das Layout neu, wenn Inhalte über den Fensterrand wachsen, was zum sichtbaren Hin- und Herspringen der Scrollleiste führt.
-  - **Lösungsidee für später**: Feste, stabile Scrollbar-Verankerung (`ScrollBarVisibility::AlwaysVisible` oder fester `bar_outer_margin`), damit die Position absolut ruhig und fest an derselben Pixelkoordinate verankert bleibt.
-- **2. Vertikaler Seitenwechsel-Bounce ("Bounced immer so von oben runter")**:
-  - **Beobachtung**: Wenn man mit der Maus (Vor-/Zurück-Tasten) oder den Pfeilen oben links zwischen Seiten navigiert, hüpft/bounced die gesamte Seite jedes Mal von oben nach unten.
-  - **Technische Ursache**:
-    - In `src/ui/pages.rs:62` ist ein festes `ui.add_space(18.0 * (1.0 - t));` verbaut.
-    - Bei jedem Seitenwechsel (`page_changed`) wird die gesamte Seite um 18 Pixel nach unten gedrückt und fährt dann in 320 ms nach oben.
-  - **Überlegungen & Optionen zur Verbesserung**:
-    - *Option A (Sanfter Fade)*: Reiner weicher Opacity-Crossfade (`ui.set_opacity(t)`), ohne jede vertikale Höhenverschiebung (ruhiger, cleaner Desktop-Look wie Apple Music).
-    - *Option B (Direktionaler Slide)*: Spotify-Style: Zurück gleitet von links nach rechts, Vorwärts von rechts nach links.
-    - *Option C (Sofort)*: Komplett ohne künstliche Verzögerung direkt gerendert.
-- **Status**: Vorerst nur dokumentiert und im Plan notiert, noch nichts verändert.
+- **Freies Drag & Swipe**: Echte egui Trägheitsphysik (`DragScroll::Always`) mit flüssigem Swipen auf Playlists, Shelves und Alben.
+
+---
+
+## Step 42: Titelbreite & Spacing-Harmonisierung — UMSETZUNG IN v2.0.0
+
+- **Quick Picks & Home**: +65 px mehr Platz für Songtitel, Hover-Fade des Drei-Punkte-Menüs.
+- **Sidebar**: 20 px / 36 px Sicherheitsabstand zur Scrollbar.
+
+---
+
+## Step 43: Scrollbar-Springen auf der Startseite & Seitenwechsel-Bounce — UMSETZUNG IN v2.1.0
+
+- **1. Scrollbar-Springen eliminiert**:
+  - ScrollArea auf `ScrollBarVisibility::AlwaysVisible` gesetzt. Die Scrollbar bleibt absolut stabil an derselben Koordinate verankert und ruckelt/springt beim Nachladen von Shelves nicht mehr nach links oder rechts.
+- **2. Vertikaler Seitenwechsel-Bounce entfernt**:
+  - `ui.add_space(18.0 * (1.0 - t));` komplett entfernt.
+  - Seitenwechsel blenden nun mit einem sauberen, ruhigen Opacity-Fade (`0.15 + 0.85 * t`) weich ein – absolut flatter- und sprungfrei wie bei Spotify/Apple Music Desktop.
 
 ---
 

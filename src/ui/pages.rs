@@ -50,16 +50,17 @@ pub fn page(app: &mut App, ui: &mut Ui, now: f64) {
     ui.set_opacity(0.15 + 0.85 * t);
     let page = app.page.clone();
     // Each page (each album, each search) keeps its own scroll position.
-    let mut area = egui::ScrollArea::vertical().id_salt(("page", &page)).auto_shrink(false);
-    // At the window's right edge: clear of where it resizes the window.
-    ui.spacing_mut().scroll.bar_outer_margin += super::titlebar::edge_inset();
+    // Stable scrollbar visibility prevents layout shifts and horizontal jitter when shelves load.
+    let mut area = egui::ScrollArea::vertical()
+        .id_salt(("page", &page))
+        .auto_shrink(false)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
     // Dev hook: YTM_SCROLL=<px> pins the page scroll, for screenshots of lower sections.
     if let Some(y) = super::dev_var("YTM_SCROLL").and_then(|v| v.parse::<f32>().ok()) {
         area = area.vertical_scroll_offset(y);
     }
     let out = area.show(ui, |ui| {
         ui.set_max_width((ui.available_width() - 20.0).max(0.0));
-        ui.add_space(18.0 * (1.0 - t));
         match &page {
             Page::Home => home(app, ui, now),
             Page::New => new(app, ui, now),
@@ -1945,6 +1946,57 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
                 app.backend.set_prefer_atmos(app.prefer_atmos);
             }
         });
+        divider(ui);
+        setting_row(ui, "Blockierte Inhalte", Some("Songs und Interpreten, die du blockiert hast. Sie werden beim Abspielen automatisch übersprungen."), |ui| {
+            let count = app.blocked_tracks.len() + app.blocked_artists.len();
+            ui.label(RichText::new(format!("{count} blockiert")).color(theme::text_dim()));
+        });
+        if !app.blocked_tracks.is_empty() || !app.blocked_artists.is_empty() {
+            ui.add_space(4.0);
+            let mut unblock_t = None;
+            for (id, t) in &app.blocked_tracks {
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    let (i_rect, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                    super::widgets::draw_minus_circle(ui, i_rect.center(), 7.0, Color32::from_rgb(239, 68, 68), 1.3);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(&t.title).font(theme::semibold(13.0)).color(theme::text()));
+                        ui.label(RichText::new(&t.artist).font(theme::regular(11.0)).color(theme::text_dim()));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(RichText::new("Entblocken").font(theme::regular(12.0))).clicked() {
+                            unblock_t = Some(id.clone());
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+            }
+            if let Some(id) = unblock_t {
+                app.unblock_track(&id);
+            }
+
+            let mut unblock_a = None;
+            for (id, a) in &app.blocked_artists {
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    let (i_rect, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                    super::widgets::draw_minus_circle(ui, i_rect.center(), 7.0, Color32::from_rgb(239, 68, 68), 1.3);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(&a.name).font(theme::semibold(13.0)).color(theme::text()));
+                        ui.label(RichText::new("Künstler blockiert").font(theme::regular(11.0)).color(theme::text_dim()));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(RichText::new("Entblocken").font(theme::regular(12.0))).clicked() {
+                            unblock_a = Some(id.clone());
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+            }
+            if let Some(id) = unblock_a {
+                app.unblock_artist(&id);
+            }
+        }
     });
 }
 

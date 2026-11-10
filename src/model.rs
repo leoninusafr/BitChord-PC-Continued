@@ -155,3 +155,18 @@ pub struct Chip {
     pub params: Option<String>,
     pub selected: bool,
 }
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BlockedTrack {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub thumb: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BlockedArtist {
+    pub id: String,
+    pub name: String,
+}
+

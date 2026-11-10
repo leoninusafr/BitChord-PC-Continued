@@ -726,6 +726,20 @@ fn menu_action_star(ui: &mut Ui, liked: bool, label: &str) -> bool {
     })
 }
 
+/// Draw Spotify-style minus circle icon (⊖)
+pub fn draw_minus_circle(ui: &Ui, center: Pos2, radius: f32, stroke_color: Color32, stroke_width: f32) {
+    ui.painter().circle_stroke(center, radius, egui::Stroke::new(stroke_width, stroke_color));
+    let bar_half_w = radius * 0.55;
+    ui.painter().hline((center.x - bar_half_w)..=(center.x + bar_half_w), center.y, egui::Stroke::new(stroke_width, stroke_color));
+}
+
+/// A menu row marked with the minus circle block glyph.
+pub fn menu_action_block(ui: &mut Ui, label: &str) -> bool {
+    menu_row(ui, label, |ui, at, color| {
+        draw_minus_circle(ui, at, 7.5, color, 1.4);
+    })
+}
+
 /// `remove`: the song's row in the open playlist, when it's yours and the song can come out.
 pub fn song_menu(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, queue_remove: Option<usize>, acts: &mut Vec<Action>) {
     ui.set_width(226.0);
@@ -773,6 +787,16 @@ pub fn song_actions(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, 
     }
     if menu_action(ui, Some(icon::THUMBS_DOWN), "Dislike") {
         acts.push(Action::Dislike(t.clone()));
+    }
+    if menu_action_block(ui, "Song blockieren") {
+        acts.push(Action::BlockTrack(t.clone()));
+    }
+    if let Some(artist) = t.artists.first() {
+        if let Some(id) = &artist.id {
+            if menu_action_block(ui, &format!("Künstler „{}“ blockieren", artist.name)) {
+                acts.push(Action::BlockArtist(id.clone(), artist.name.clone()));
+            }
+        }
     }
     ui.separator();
     if menu_action(ui, Some(icon::LIST_PLUS), "Add to playlist") {
