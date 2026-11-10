@@ -53,6 +53,11 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
         return;
     };
 
+    // If lyrics aren't loaded or are for another song, trigger backend lyrics request immediately
+    if !app.lyrics.as_ref().is_some_and(|(lid, _)| lid == &t.id) && !app.loading {
+        app.backend.request(crate::backend::Req::Lyrics(t.clone()));
+    }
+
     egui::ScrollArea::vertical()
         .id_salt("np-details-scroll")
         .auto_shrink(false)
@@ -118,8 +123,11 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                 let hh = theme::anim_bool(ui.ctx(), hresp.id.with("hh"), hresp.hovered(), 0.15);
                 let pop = theme::anim_bool(ui.ctx(), ("liked", &t.id), liked, 0.25);
+                if hh > 0.0 {
+                    ui.painter().circle_filled(btn_r.center(), 14.0, theme::glass(0.08 * hh));
+                }
                 let icon_fg = if liked { accent } else { theme::lerp_color(theme::text_dim(), theme::text(), hh) };
-                glyphs::draw(ui, btn_r.center(), 20.0 + pop * 3.0, if liked { glyphs::HEART_FILLED } else { glyphs::HEART }, icon_fg);
+                glyphs::draw(ui, btn_r.center(), 18.0 + pop * 2.0, if liked { glyphs::HEART_FILLED } else { glyphs::HEART }, icon_fg);
                 if hresp.clicked() {
                     app.actions.push(Action::Like(t.clone(), !liked));
                 }
@@ -130,9 +138,12 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
                 let b_resp = named(b_resp, if is_blocked { "Song entblocken" } else { "Song blockieren" })
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                 let bh = theme::anim_bool(ui.ctx(), b_resp.id.with("bh"), b_resp.hovered(), 0.15);
+                if bh > 0.0 {
+                    ui.painter().circle_filled(b_rect.center(), 14.0, theme::glass(0.08 * bh));
+                }
                 let b_fg = if is_blocked { Color32::from_rgb(239, 68, 68) } else { theme::lerp_color(theme::text_dim(), theme::text(), bh) };
                 let center = pos2(b_rect.center().x.round(), b_rect.center().y.round());
-                super::widgets::draw_minus_circle(ui, center, 7.2, b_fg, 1.2);
+                super::widgets::draw_minus_circle(ui, center, 7.8, b_fg, 1.3);
                 if b_resp.clicked() {
                     if is_blocked {
                         app.actions.push(Action::UnblockTrack(t.id.clone()));
@@ -142,7 +153,7 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
                 }
             });
 
-            // Artists Line directly below Title with perfectly calibrated optical underline
+            // Artists Line directly below Title with clean hover illumination
             ui.add_space(2.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
@@ -152,12 +163,8 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
                     let (a_rect, a_resp) = ui.allocate_exact_size(galley.size(), Sense::click());
                     let a_resp = a_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                     let ah = theme::anim_bool(ui.ctx(), a_resp.id.with("ah"), a_resp.hovered(), 0.12);
-                    let a_color = theme::lerp_color(theme::text_dim(), theme::text(), ah);
+                    let a_color = theme::lerp_color(theme::text_dim(), Color32::WHITE, ah);
                     ui.painter().galley(a_rect.left_top(), galley, a_color);
-                    // Underline only under the artist's name, snapped to text baseline
-                    if ah > 0.0 {
-                        ui.painter().hline(a_rect.left()..=a_rect.right(), (a_rect.bottom() + 0.5).round(), egui::Stroke::new(1.0, a_color));
-                    }
                     if a_resp.clicked() && let Some(id) = &a.id {
                         app.actions.push(Action::Open(Target::Artist(id.clone())));
                     }
@@ -174,7 +181,7 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
             let artist_name = t.artists.first().map(|a| a.name.as_str()).unwrap_or("Artist");
             let artist_id = t.artists.first().and_then(|a| a.id.clone());
 
-            let (card_rect, card_resp) = ui.allocate_exact_size(vec2(width, 114.0), Sense::click());
+            let (card_rect, card_resp) = ui.allocate_exact_size(vec2(width, 126.0), Sense::click());
             let ch = theme::anim_bool(ui.ctx(), card_resp.id.with("ch"), card_resp.hovered(), 0.15);
             ui.painter().rect_filled(card_rect, 10.0, theme::panel(0.48 + 0.14 * ch));
             ui.painter().rect_stroke(card_rect, 10.0, egui::Stroke::new(1.0, theme::glass(0.12)), egui::StrokeKind::Inside);
@@ -188,22 +195,19 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
                 theme::text_dim(),
             );
 
-            // Artist name with hover underline
-            let name_font = theme::bold(16.5);
+            // Artist name with hover illumination
+            let name_font = theme::bold(17.0);
             let name_g = super::widgets::galley(ui, artist_name, name_font, theme::text(), text_rect.width());
             let name_r = Rect::from_min_size(text_rect.left_top() + vec2(0.0, 22.0), name_g.size());
             let an_resp = ui.interact(name_r, ui.scope_id().with("about-artist-name"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
             let anh = theme::anim_bool(ui.ctx(), an_resp.id.with("anh"), an_resp.hovered(), 0.12);
             let an_color = theme::lerp_color(theme::text(), Color32::WHITE, anh);
             ui.painter().galley(name_r.left_top(), name_g, an_color);
-            if anh > 0.0 {
-                ui.painter().hline(name_r.left()..=name_r.right(), (name_r.bottom() + 0.5).round(), egui::Stroke::new(1.0, an_color));
-            }
 
-            // Spotify-style "Follow" / "Following" pill button inside card (generous 16px gap below name)
+            // Spotify-style "Follow" / "Following" pill button inside card (generously spaced below name)
             let is_following = app.followed_artists.contains(artist_name);
             let btn_size = vec2(96.0, 28.0);
-            let btn_rect = Rect::from_min_size(pos2(text_rect.left(), text_rect.bottom() - btn_size.y), btn_size);
+            let btn_rect = Rect::from_min_size(pos2(text_rect.left(), text_rect.top() + 58.0), btn_size);
             let bresp = ui.interact(btn_rect, ui.scope_id().with("details-follow-btn"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
             let bh = theme::anim_bool(ui.ctx(), bresp.id.with("bh"), bresp.hovered(), 0.15);
             if is_following {

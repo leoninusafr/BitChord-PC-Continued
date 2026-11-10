@@ -1574,12 +1574,16 @@ impl eframe::App for App {
             let side_frame = match app_style.sidebar {
                 SidebarStyle::Glass => egui::Frame::new()
                     .fill(theme::panel(side_alpha.max(0.35)))
-                    .corner_radius(egui::CornerRadius { nw: 0, ne: 12, sw: 0, se: 12 })
+                    .stroke(egui::Stroke::new(1.0, theme::glass(0.10)))
+                    .corner_radius(egui::CornerRadius::same(12))
+                    .outer_margin(egui::Margin { left: 8, right: 4, top: 8, bottom: 8 })
                     .inner_margin(side_margin),
                 SidebarStyle::Transparent => egui::Frame::new().inner_margin(side_margin),
                 SidebarStyle::Solid => egui::Frame::new()
                     .fill(look.solid())
-                    .corner_radius(egui::CornerRadius { nw: 0, ne: 12, sw: 0, se: 12 })
+                    .stroke(egui::Stroke::new(1.0, theme::glass(0.10)))
+                    .corner_radius(egui::CornerRadius::same(12))
+                    .outer_margin(egui::Margin { left: 8, right: 4, top: 8, bottom: 8 })
                     .inner_margin(side_margin),
                 SidebarStyle::Floating => egui::Frame::new()
                     .fill(theme::panel(side_alpha.max(0.35)))
@@ -1627,9 +1631,10 @@ impl eframe::App for App {
                     .exact_size(340.0 * q)
                     .frame(egui::Frame::new()
                         .fill(theme::panel(0.48))
-                        .corner_radius(egui::CornerRadius { nw: 12, ne: 0, sw: 12, se: 0 })
-                        .stroke(egui::Stroke::new(1.0, theme::glass(0.10)))
-                        .inner_margin(egui::Margin::symmetric(14, 16)))
+                        .stroke(egui::Stroke::new(1.0, theme::glass(0.12)))
+                        .corner_radius(egui::CornerRadius::same(12))
+                        .outer_margin(egui::Margin { left: 4, right: 8, top: 8, bottom: 8 })
+                        .inner_margin(egui::Margin { left: 14, right: 14, top: titlebar::top_margin(14, 32.0) + 4, bottom: 14 }))
                     .show_separator_line(false)
                     .show(ui, |ui| shell::queue_drawer(self, ui));
             }
@@ -1642,9 +1647,10 @@ impl eframe::App for App {
                     .default_size(target_w * d)
                     .frame(egui::Frame::new()
                         .fill(theme::panel(0.48))
-                        .corner_radius(egui::CornerRadius { nw: 12, ne: 0, sw: 12, se: 0 })
-                        .stroke(egui::Stroke::new(1.0, theme::glass(0.10)))
-                        .inner_margin(egui::Margin::symmetric(14, 16)))
+                        .stroke(egui::Stroke::new(1.0, theme::glass(0.12)))
+                        .corner_radius(egui::CornerRadius::same(12))
+                        .outer_margin(egui::Margin { left: 4, right: 8, top: 8, bottom: 8 })
+                        .inner_margin(egui::Margin { left: 14, right: 14, top: titlebar::top_margin(14, 32.0) + 4, bottom: 14 }))
                     .show_separator_line(false)
                     .show(ui, |ui| {
                         let w = ui.available_width();
