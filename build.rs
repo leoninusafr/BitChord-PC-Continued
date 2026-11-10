@@ -3,11 +3,17 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/icon/icon.ico");
     theme_covers();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        winresource::WindowsResource::new()
-            .set_icon("assets/icon/icon.ico")
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("assets/icon/icon.ico")
             .set_manifest(MANIFEST)
-            .compile()
-            .expect("failed to embed Windows icon");
+            .set("FileDescription", "BitChord Music Player")
+            .set("ProductName", "BitChord")
+            .set("ProductVersion", "2.1.0")
+            .set("FileVersion", "2.1.0")
+            .set("OriginalFilename", "bitchord.exe")
+            .set("LegalCopyright", "GPL-3.0 License");
+        res.compile()
+            .expect("failed to embed Windows icon and version info");
     }
 }
 

@@ -1536,7 +1536,7 @@ fn volume_slider_apple(app: &mut App, ui: &mut Ui, slider: Rect, speaker: Rect, 
     if sresp.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
-            app.audio.set_volume((vol + scroll / 1200.0).clamp(0.0, 1.0));
+            app.audio.set_volume((vol + scroll / 700.0).clamp(0.0, 1.0));
         }
     }
     if sresp.clicked() {
@@ -1590,7 +1590,7 @@ fn volume_slider_apple(app: &mut App, ui: &mut Ui, slider: Rect, speaker: Rect, 
     if vresp.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
-            app.audio.set_volume((vol + scroll / 1200.0).clamp(0.0, 1.0));
+            app.audio.set_volume((vol + scroll / 700.0).clamp(0.0, 1.0));
         }
     }
 }
