@@ -252,8 +252,9 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     let round = cs.shape != Shape::Rounded;
     let radius = if round { side / 2.0 } else { cs.radius.clamp(0.0, side / 2.0) };
     let cr = egui::CornerRadius::same(radius.min(255.0) as u8);
-    if cs.glow > 0.0 {
-        let s = egui::epaint::Shadow { offset: [0, 16], blur: 90, spread: 6, color: theme::with_alpha(app.accent_color(), cs.glow.min(1.0) * 0.7) };
+    let glow_strength = if app.cover_glow { cs.glow.max(0.65) } else { cs.glow };
+    if glow_strength > 0.0 {
+        let s = egui::epaint::Shadow { offset: [0, 16], blur: 90, spread: 6, color: theme::with_alpha(app.accent_color(), glow_strength.min(1.0) * 0.7) };
         ui.painter().add(s.as_shape(art, cr));
     }
     if cs.shadow > 0.0 {

@@ -3,6 +3,7 @@
 mod appicon;
 mod apple;
 mod artist_signature;
+mod autostart;
 mod fullscreen;
 mod proxy;
 mod remote;

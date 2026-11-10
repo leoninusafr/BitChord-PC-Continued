@@ -1621,17 +1621,63 @@ pub fn queue_list(app: &mut App, ui: &mut Ui, salt: &str) {
             return;
         }
         let start = app.queue.index.unwrap_or(0);
-        ui.checkbox(&mut app.autoplay, egui::RichText::new("Autoplay similar songs").color(theme::text_dim())).on_hover_cursor(egui::CursorIcon::PointingHand);
-        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            super::pages::toggle(ui, &mut app.autoplay, "Autoplay similar songs");
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Autoplay similar songs").color(theme::text_dim()).size(13.0));
+        });
+        ui.add_space(8.0);
+        let pitch = widgets::ROW_H + ui.spacing().item_spacing.y;
+        let accent = app.accent_color();
+        let drag_id = egui::Id::unique(("queue-drag", salt));
+        let mut drag: Option<(usize, usize)> = ui.ctx().data(|d| d.get_temp(drag_id));
+        let pointer = ui.input(|i| i.pointer.interact_pos());
         let (queue, liked, acts, has_current, by) = (&app.queue.tracks, &app.liked, &mut app.actions, app.queue.index.is_some(), &app.jam.by);
+        let mut drop_bar: Option<f32> = None;
         widgets::visible_rows(ui, queue.len() - start, |ui, k| {
             let i = start + k;
             let t = &queue[i];
             // The first row is the current song.
             let current = k == 0 && has_current;
+            let dragging = drag.is_some_and(|(from, _)| from == i);
             let queue_remove = if !current { Some(i) } else { None };
-            let o = widgets::RowOpts { current, queue_remove, added_by: by.get(&t.id).cloned(), ..rows.opts(liked, t, None, false) };
+            let o = widgets::RowOpts {
+                current,
+                queue_remove,
+                added_by: by.get(&t.id).cloned(),
+                hide_duration_hover: !current,
+                drag: !current,
+                ..rows.opts(liked, t, None, false)
+            };
             let resp = widgets::track_row(ui, t, &o, acts);
+            if !current && resp.drag_started() {
+                drag = Some((i, i));
+                ui.ctx().request_repaint();
+            }
+            if let Some((from, to)) = &mut drag
+                && *from == i
+                && resp.dragged()
+                && let Some(p) = pointer
+            {
+                let moved = ((p.y - resp.rect.center().y) / pitch).round() as isize;
+                *to = (i as isize + moved).clamp(start as isize, (queue.len() - 1) as isize) as usize;
+                drop_bar = Some(resp.rect.top() + (*to as f32 - i as f32) * pitch);
+            }
+            if dragging {
+                let r = resp.rect;
+                let p = ui.painter();
+                p.rect_filled(r, 8.0, theme::glass(0.16));
+                p.rect_stroke(r, 8.0, egui::Stroke::new(1.0, theme::glass(0.14)), egui::StrokeKind::Inside);
+            }
+            if let Some((from, to)) = drag
+                && from == i
+                && resp.drag_stopped()
+            {
+                if to != from {
+                    acts.push(Action::QueueMove(from, to));
+                }
+                drag = None;
+            }
             if resp.clicked() {
                 // The playing row pauses/resumes instead of doing nothing.
                 acts.push(if current { Action::TogglePlay } else { Action::QueueJump(i) });
@@ -1645,6 +1691,20 @@ pub fn queue_list(app: &mut App, ui: &mut Ui, salt: &str) {
                 if xr.clicked() {
                     acts.push(Action::QueueRemove(i));
                 }
+            }
+        });
+        if let Some(y) = drop_bar {
+            let clip = ui.clip_rect();
+            let y = y.clamp(clip.top(), clip.bottom() - 2.0);
+            let left = ui.max_rect().left() + 2.0;
+            let right = ui.max_rect().right() - 2.0;
+            ui.painter().rect_filled(Rect::from_min_max(pos2(left, y - 1.0), pos2(right, y + 1.0)), 1.0, accent);
+        }
+        ui.ctx().data_mut(|d| {
+            if let Some(d_val) = drag {
+                d.insert_temp(drag_id, d_val);
+            } else {
+                d.remove_temp::<(usize, usize)>(drag_id);
             }
         });
     });

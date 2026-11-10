@@ -956,9 +956,13 @@ pub struct RowOpts {
     pub remove: Option<usize>,
     /// The row's index in the queue, so its menu can remove it from queue.
     pub queue_remove: Option<usize>,
+    /// Queue rows: the length makes way for the remove ✕ while the row is hovered
+    pub hide_duration_hover: bool,
+    /// The row gives itself to a drag, so a held row reorders the queue (clicks still play).
+    pub drag: bool,
 }
 
-const ROW_H: f32 = 56.0;
+pub const ROW_H: f32 = 56.0;
 
 /// A long list of song rows: only the ones on screen are built; the rest is empty space
 /// of the same height. `row(ui, i)` draws row `i`, under an id of its own so its hover
@@ -985,7 +989,8 @@ pub fn track_row(ui: &mut Ui, t: &Track, o: &RowOpts, acts: &mut Vec<Action>) ->
     // Picking: the cover (left 54 px) plays, the rest of the row picks.
     let hit_left = if o.pick && o.number.is_none() { rect.left() + 54.0 } else { rect.left() };
     let hit_rect = Rect::from_min_max(pos2(hit_left, rect.top()), pos2(rect.right() - 42.0, rect.bottom()));
-    let resp = named(ui.interact(hit_rect, base.id.with("play"), Sense::click()), &t.title).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let sense = if o.drag { Sense::click_and_drag() } else { Sense::click() };
+    let resp = named(ui.interact(hit_rect, base.id.with("play"), sense), &t.title).on_hover_cursor(egui::CursorIcon::PointingHand);
     let h = theme::anim_bool(ui.ctx(), base.id.with("h"), base.contains_pointer(), 0.15);
     if h > 0.0 || o.current {
         let a = if o.current { 0.07 + 0.05 * h } else { 0.07 * h };
@@ -1090,7 +1095,9 @@ pub fn track_row(ui: &mut Ui, t: &Track, o: &RowOpts, acts: &mut Vec<Action>) ->
             }
         }
     }
-    if let Some(d) = t.duration {
+    if let Some(d) = t.duration
+        && !(o.hide_duration_hover && base.contains_pointer())
+    {
         ui.painter().text(pos2(dur_right, cy), Align2::RIGHT_CENTER, super::fmt_time(d), theme::regular(13.0), theme::text_dim());
     }
     let more_rect = Rect::from_center_size(pos2(rect.right() - 18.0, cy), Vec2::splat(28.0));

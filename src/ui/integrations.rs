@@ -198,6 +198,7 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        crate::fullscreen::bring_to_front();
     }
 
     /// Download the media controls' cover through our own client, into a file.

@@ -127,6 +127,8 @@ impl Rows {
             selected: None,
             remove: None,
             queue_remove: None,
+            hide_duration_hover: false,
+            drag: false,
         }
     }
 }
@@ -2238,6 +2240,10 @@ fn settings_appearance(app: &mut App, ui: &mut Ui) {
             toggle(ui, &mut app.reactive_bg, "Pulse with the music");
         });
         divider(ui);
+        setting_row(ui, "Album cover glow", Some("A soft, ambient light glow radiating from the album artwork in full view."), |ui| {
+            toggle(ui, &mut app.cover_glow, "Album cover glow");
+        });
+        divider(ui);
         setting_row(ui, "Font", Some("For the whole app and the lyrics. Any font installed on this PC works, e.g. one made for your language."), |ui| {
             if let Some(name) = font_picker(ui) {
                 theme::set_font_choice(&name);
@@ -2263,6 +2269,12 @@ fn settings_appearance(app: &mut App, ui: &mut Ui) {
 fn settings_window(app: &mut App, ui: &mut Ui) {
     section_label(ui, "Window", None);
     settings_card(ui, |ui| {
+        setting_row(ui, "Start with Windows", Some("Launch BitChord automatically when you sign in to Windows."), |ui| {
+            if toggle(ui, &mut app.autostart, "Start with Windows").changed() {
+                crate::autostart::set_enabled(app.autostart);
+            }
+        });
+        divider(ui);
         setting_row(ui, "Close to tray", Some("Clicking × hides the window and keeps the music playing. Click the tray icon to bring it back, or right-click it to quit."), |ui| {
             toggle(ui, &mut app.close_to_tray, "Close to tray");
         });

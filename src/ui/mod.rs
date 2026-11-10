@@ -103,6 +103,7 @@ pub enum Action {
     Go(Page),
     QueueJump(usize),
     QueueRemove(usize),
+    QueueMove(usize, usize),
     /// Open up next (the player's) or the queue drawer (the bar's).
     ViewQueue,
     Seek(f32),
@@ -445,6 +446,7 @@ pub struct App {
     appearance: theme::Appearance,
     anim_bg: bool,
     reactive_bg: bool,
+    pub(super) cover_glow: bool,
     /// Skip the parts of music videos SponsorBlock marks as not music.
     sponsorblock: bool,
     /// Crossfade between songs, and over how many seconds.
@@ -543,6 +545,8 @@ pub struct App {
     media_cover: Arc<std::sync::Mutex<Option<(String, String)>>>,
 
     // window
+    /// Open BitChord automatically when Windows boots.
+    pub(super) autostart: bool,
     /// Clicking × hides the window to the tray instead of quitting.
     close_to_tray: bool,
     /// Settings › Window: draw with wgpu (Vulkan) from the next start (renderer.rs).
@@ -708,6 +712,7 @@ impl App {
             output_device: get("output_device").filter(|d| !d.is_empty()).map(|id| (id, get("output_device_name").unwrap_or_default())),
             output_devices: Vec::new(),
             updater: None,
+            autostart: crate::autostart::is_enabled(),
             close_to_tray: get("close_to_tray").is_some_and(|v| v == "1"),
             wgpu_renderer,
             app_icon,
@@ -768,6 +773,7 @@ impl App {
             appearance: theme::Appearance::from_key(&dev_var("YTM_APPEARANCE").map(str::to_owned).or_else(|| get("appearance")).unwrap_or_default()),
             anim_bg: get("anim_bg").is_none_or(|v| v == "1"),
             reactive_bg: get("reactive_bg").is_none_or(|v| v == "1"),
+            cover_glow: get("cover_glow").is_some_and(|v| v == "1"),
             sponsorblock: get("sponsorblock").is_some_and(|v| v == "1"),
             crossfade: get("crossfade").is_some_and(|v| v == "1"),
             automix: get("automix").is_some_and(|v| v == "1"),
@@ -1782,6 +1788,7 @@ impl eframe::App for App {
         }
         storage.set_string("anim_bg", b(self.anim_bg));
         storage.set_string("reactive_bg", b(self.reactive_bg));
+        storage.set_string("cover_glow", b(self.cover_glow));
         storage.set_string("signature_api", self.signature_api.clone());
         storage.set_string("hires_source", self.hires_sources.join("\n"));
         storage.set_string("prefer_atmos", b(self.prefer_atmos));

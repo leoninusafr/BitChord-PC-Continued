@@ -212,6 +212,28 @@ impl Queue {
         }
     }
 
+    /// Move a song to another place in the queue (drag and drop). The song playing
+    /// stays the one playing, wherever it lands.
+    pub fn move_track(&mut self, from: usize, to: usize) {
+        let n = self.tracks.len();
+        if from >= n || to >= n || from == to {
+            return;
+        }
+        let t = self.tracks.remove(from);
+        self.tracks.insert(to, t);
+        if let Some(cur) = self.index {
+            self.index = Some(if cur == from {
+                to
+            } else if cur > from && cur <= to {
+                cur - 1
+            } else if cur < from && cur >= to {
+                cur + 1
+            } else {
+                cur
+            });
+        }
+    }
+
     /// Radio songs for `seed` join the end, without the seed or songs already queued.
     /// Returns whether the song playing was the last one.
     pub fn add_radio(&mut self, seed: &str, tracks: Vec<Track>) -> bool {

@@ -56,6 +56,12 @@ pub fn set_rounded(radius: Option<f32>) {
     imp::rounded(radius);
 }
 
+/// Bring the window out of minimization and to the foreground on Windows.
+pub fn bring_to_front() {
+    #[cfg(windows)]
+    imp::bring_to_front();
+}
+
 #[cfg(windows)]
 mod imp {
     use std::sync::{Mutex, OnceLock};
@@ -186,5 +192,18 @@ mod imp {
             let _ = RedrawWindow(Some(hwnd), None, None, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
         }
         true
+    }
+
+    pub fn bring_to_front() {
+        if let Some(&h) = WINDOW.get() {
+            let hwnd = HWND(h as *mut _);
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE};
+                if IsIconic(hwnd).as_bool() {
+                    let _ = ShowWindow(hwnd, SW_RESTORE);
+                }
+                let _ = SetForegroundWindow(hwnd);
+            }
+        }
     }
 }

@@ -180,6 +180,7 @@ impl App {
                 self.play_current();
             }
             Action::QueueRemove(i) => self.queue.remove(i),
+            Action::QueueMove(from, to) => self.queue.move_track(from, to),
             Action::ViewQueue => {
                 if self.np_open {
                     self.np_tab = NpTab::UpNext;
