@@ -175,8 +175,8 @@ fn details_content(app: &mut App, ui: &mut Ui) {
 
             // 2. Title & Favorite Heart on same horizontal baseline (Spotify style)
             ui.horizontal(|ui| {
-                let action_w = 64.0;
-                let title_w = (width - action_w - 8.0).max(10.0);
+                let action_w = 32.0;
+                let title_w = (width - action_w - 6.0).max(10.0);
 
                 let (title_box, _) = ui.allocate_exact_size(vec2(title_w, 24.0), Sense::hover());
                 let (_, title_resp) = super::widgets::marquee_title(
@@ -215,26 +215,6 @@ fn details_content(app: &mut App, ui: &mut Ui) {
                 glyphs::draw(ui, btn_r.center(), 18.0 + pop * 2.0, if liked { glyphs::HEART_FILLED } else { glyphs::HEART }, icon_fg);
                 if hresp.clicked() {
                     app.actions.push(Action::Like(t.clone(), !liked));
-                }
-
-                // Block button (⊖ Minus Circle)
-                let is_blocked = app.blocked_tracks.contains_key(&t.id);
-                let (b_rect, b_resp) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
-                let b_resp = named(b_resp, if is_blocked { "Unblock song" } else { "Block song" })
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                let bh = theme::anim_bool(ui.ctx(), b_resp.id.with("bh"), b_resp.hovered(), 0.15);
-                if bh > 0.0 {
-                    ui.painter().circle_filled(b_rect.center(), 14.0, theme::glass(0.08 * bh));
-                }
-                let b_fg = if is_blocked { Color32::from_rgb(239, 68, 68) } else { theme::lerp_color(theme::text_dim(), theme::text(), bh) };
-                let center = pos2(b_rect.center().x.round(), b_rect.center().y.round());
-                super::widgets::draw_minus_circle(ui, center, 7.8, b_fg, 1.3);
-                if b_resp.clicked() {
-                    if is_blocked {
-                        app.actions.push(Action::UnblockTrack(t.id.clone()));
-                    } else {
-                        app.actions.push(Action::BlockTrack(t.clone()));
-                    }
                 }
             });
 

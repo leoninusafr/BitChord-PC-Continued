@@ -88,11 +88,11 @@ pub fn text_at(ui: &Ui, pos: Pos2, text: &str, font: egui::FontId, color: Color3
     rect
 }
 
-/// Spotify-style horizontal marquee text:
+/// Continuous Spotify-style horizontal marquee text:
 /// - Fits static text when width allows.
-/// - If text overflows: smoothly scrolls horizontally when song is playing OR on hover.
-/// - Pauses at the start (2.2s) so the track title can be read, scrolls to the end at 32px/s,
-///   pauses at the end (1.6s) to show featured artists/remix info, then smoothly returns.
+/// - If text overflows: smoothly scrolls continuously from right to left, wrapping around
+///   with an elegant gap to loop seamlessly and infinitely without reversing direction.
+/// - Pauses at the start position (2.0s) so track title is easily readable.
 /// - Subtle optical underline on hover (1.5px below baseline).
 /// - 60 FPS repaint request during active scrolling.
 pub fn marquee_title(
@@ -128,34 +128,26 @@ pub fn marquee_title(
         return (actual_rect, resp);
     }
 
-    let overflow = text_w - max_w;
+    let gap = 42.0f32;
+    let cycle_distance = text_w + gap;
     let hovered = resp.hovered();
     let should_scroll = is_playing || hovered;
 
     let offset = if should_scroll {
         ui.ctx().request_repaint();
-        let t_start_pause = 2.2f64;
-        let speed = 32.0f64;
-        let t_scroll = (overflow as f64 / speed).max(0.5);
-        let t_end_pause = 1.6f64;
-        let t_return = (overflow as f64 / (speed * 1.5)).max(0.4);
-        let t_cycle = t_start_pause + t_scroll + t_end_pause + t_return;
+        let t_start_pause = 2.0f64;
+        let speed = 30.0f64;
+        let t_scroll = (cycle_distance as f64) / speed;
+        let t_cycle = t_start_pause + t_scroll;
 
         let now = ui.input(|i| i.time);
         let phase = now % t_cycle;
 
         if phase < t_start_pause {
             0.0f32
-        } else if phase < t_start_pause + t_scroll {
-            let p = ((phase - t_start_pause) / t_scroll) as f32;
-            let smooth_p = p * p * (3.0 - 2.0 * p);
-            smooth_p * overflow
-        } else if phase < t_start_pause + t_scroll + t_end_pause {
-            overflow
         } else {
-            let p = ((phase - (t_start_pause + t_scroll + t_end_pause)) / t_return) as f32;
-            let smooth_p = p * p * (3.0 - 2.0 * p);
-            (1.0 - smooth_p) * overflow
+            let dt = phase - t_start_pause;
+            (dt * speed) as f32
         }
     } else {
         0.0f32
@@ -164,11 +156,20 @@ pub fn marquee_title(
     let clip_box = actual_rect.intersect(ui.painter().clip_rect());
     let painter = ui.painter().with_clip_rect(clip_box);
 
-    let text_pos = pos2(actual_rect.left() - offset, actual_rect.top() + (actual_rect.height() - text_h) / 2.0);
-    painter.galley(text_pos, full_galley, color);
+    let y = actual_rect.top() + (actual_rect.height() - text_h) / 2.0;
+    let x1 = actual_rect.left() - offset;
+    painter.galley(pos2(x1, y), full_galley.clone(), color);
+
+    // Seamless continuous wrap-around: second copy trails after gap
+    if should_scroll && offset > 0.0 {
+        let x2 = x1 + cycle_distance;
+        if x2 < actual_rect.right() {
+            painter.galley(pos2(x2, y), full_galley, color);
+        }
+    }
 
     if hovered && underline_on_hover {
-        let line_y = (text_pos.y + text_h + 0.5).round();
+        let line_y = (y + text_h + 0.5).round();
         painter.hline(actual_rect.left()..=actual_rect.right(), line_y, egui::Stroke::new(1.0, color));
     }
 
@@ -751,10 +752,17 @@ fn menu_action_star(ui: &mut Ui, liked: bool, label: &str) -> bool {
 
 /// Draw Spotify-style minus circle icon (⊖)
 pub fn draw_minus_circle(ui: &Ui, center: Pos2, radius: f32, stroke_color: Color32, stroke_width: f32) {
-    let center = pos2(center.x.round(), center.y.round());
-    ui.painter().circle_stroke(center, radius, egui::Stroke::new(stroke_width, stroke_color));
+    let cx = center.x.round();
+    let cy = center.y.round();
+    let circle_center = pos2(cx, cy);
+    ui.painter().circle_stroke(circle_center, radius, egui::Stroke::new(stroke_width, stroke_color));
     let bar_half_w = (radius * 0.52).round();
-    ui.painter().hline((center.x - bar_half_w)..=(center.x + bar_half_w), center.y, egui::Stroke::new(stroke_width, stroke_color));
+    // Offset by -0.5px so subpixel antialiasing places the stroke dead-center within the circle stroke
+    let line_y = cy - 0.5;
+    ui.painter().line_segment(
+        [pos2(cx - bar_half_w, line_y), pos2(cx + bar_half_w, line_y)],
+        egui::Stroke::new(stroke_width, stroke_color),
+    );
 }
 
 /// A menu row marked with the minus circle block glyph.

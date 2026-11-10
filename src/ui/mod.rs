@@ -167,6 +167,7 @@ pub enum Action {
     /// Block an artist permanently.
     BlockArtist(String, String),
     /// Unblock a previously blocked track.
+    #[allow(dead_code)]
     UnblockTrack(String),
     /// Unblock a previously blocked artist.
     UnblockArtist(String),
