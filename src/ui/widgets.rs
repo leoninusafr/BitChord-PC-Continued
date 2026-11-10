@@ -662,6 +662,27 @@ pub fn card(ui: &mut Ui, c: &Card, width: f32, liked: bool, acts: &mut Vec<Actio
 fn card_menu_contents(ui: &mut Ui, c: &Card, liked: bool, acts: &mut Vec<Action>) {
     match &c.target {
         Target::Song(t) => song_menu(ui, t, liked, None, None, acts),
+        Target::Artist(id) => {
+            ui.set_width(226.0);
+            ui.add_space(3.0);
+            if menu_action(ui, Some(icon::PLAY), "Play") {
+                acts.push(Action::PlayCollection(Target::Artist(id.clone()), false));
+            }
+            if menu_action(ui, Some(icon::SHUFFLE), "Shuffle play") {
+                acts.push(Action::PlayCollection(Target::Artist(id.clone()), true));
+            }
+            if menu_action(ui, None, "Open") {
+                acts.push(Action::Open(Target::Artist(id.clone())));
+            }
+            if menu_action_block(ui, "Block artist") {
+                acts.push(Action::BlockArtist(id.clone(), c.title.clone()));
+            }
+            ui.separator();
+            if menu_action(ui, None, "Copy link") {
+                acts.push(Action::Share(Target::Artist(id.clone())));
+            }
+            ui.add_space(3.0);
+        }
         t => {
             ui.set_width(226.0);
             ui.add_space(3.0);
@@ -788,18 +809,8 @@ pub fn song_actions(ui: &mut Ui, t: &Track, liked: bool, remove: Option<usize>, 
     if menu_action_star(ui, liked, if liked { "Remove like" } else { "Like song" }) {
         acts.push(Action::Like(t.clone(), !liked));
     }
-    if menu_action(ui, Some(icon::THUMBS_DOWN), "Dislike") {
-        acts.push(Action::Dislike(t.clone()));
-    }
-    if menu_action_block(ui, "Song blockieren") {
+    if menu_action_block(ui, "Block song") {
         acts.push(Action::BlockTrack(t.clone()));
-    }
-    if let Some(artist) = t.artists.first() {
-        if let Some(id) = &artist.id {
-            if menu_action_block(ui, &format!("Künstler „{}“ blockieren", artist.name)) {
-                acts.push(Action::BlockArtist(id.clone(), artist.name.clone()));
-            }
-        }
     }
     ui.separator();
     if menu_action(ui, Some(icon::LIST_PLUS), "Add to playlist") {

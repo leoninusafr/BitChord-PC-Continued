@@ -7,7 +7,7 @@ use crate::model::{Target, Track};
 
 use super::lists::LIKED_MUSIC;
 use super::queue::QueueFill;
-use super::{Action, App, Dialog, LibTab, NpTab, Page, jam, transfer};
+use super::{Action, App, Dialog, LibTab, NpTab, Page, RightTab, jam, transfer};
 
 impl App {
     pub(super) fn apply(&mut self, a: Action) {
@@ -47,9 +47,39 @@ impl App {
             Action::ShuffleToggle => self.toggle_shuffle(),
             Action::PlayRandomSong => self.play_random_song(),
             Action::ToggleDetails => {
-                self.details_open = !self.details_open;
-                if self.details_open {
+                if !self.details_open {
+                    self.details_open = true;
+                    self.right_tab = RightTab::Details;
                     self.queue_open = false;
+                } else if self.right_tab == RightTab::Details {
+                    self.details_open = false;
+                } else {
+                    self.right_tab = RightTab::Details;
+                }
+            }
+            Action::ToggleFriends => {
+                if !self.details_open {
+                    self.details_open = true;
+                    self.right_tab = RightTab::Friends;
+                    self.queue_open = false;
+                    self.refresh_friend_activity();
+                } else if self.right_tab == RightTab::Friends {
+                    self.details_open = false;
+                } else {
+                    self.right_tab = RightTab::Friends;
+                    self.refresh_friend_activity();
+                }
+            }
+            Action::FriendActivityLoaded(res) => {
+                self.friend_activity_loading = false;
+                match res {
+                    Ok(friends) => {
+                        self.friend_activity = friends;
+                        self.friend_activity_error = None;
+                    }
+                    Err(e) => {
+                        self.friend_activity_error = Some(e);
+                    }
                 }
             }
             Action::ToggleDevices => self.devices_open = !self.devices_open,
@@ -60,7 +90,7 @@ impl App {
                 if let Some(hit) = cached {
                     self.play_list(vec![hit], 0);
                 } else {
-                    self.toast(format!("Spottube: Suche \"{}\"...", t.name));
+                    self.toast(format!("Spottube: Searching \"{}\"...", t.name));
                     let api = self.backend.api();
                     let cache = self.spotify_cache.clone();
                     let bg_actions = self.bg_actions.clone();
@@ -90,7 +120,7 @@ impl App {
                 if let Some(hit) = &cached {
                     self.play_list(vec![hit.clone()], 0);
                 } else {
-                    self.toast(format!("Spottube: Starte \"{}\"...", first_t.name));
+                    self.toast(format!("Spottube: Playing \"{}\"...", first_t.name));
                 }
 
                 self.backend.spawn(async move {

@@ -122,6 +122,108 @@ pub struct Account {
     pub library: Vec<Entry>,
 }
 
+/// User info in the Spotify buddy list.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FriendUser {
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub image_url: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FriendArtist {
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FriendAlbum {
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FriendContext {
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub index: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FriendTrack {
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub image_url: Option<String>,
+    #[serde(default)]
+    pub artist: Option<FriendArtist>,
+    #[serde(default)]
+    pub album: Option<FriendAlbum>,
+    #[serde(default)]
+    pub context: Option<FriendContext>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FriendActivity {
+    #[serde(default)]
+    pub timestamp: u64,
+    #[serde(default)]
+    pub user: Option<FriendUser>,
+    #[serde(default)]
+    pub track: Option<FriendTrack>,
+}
+
+impl FriendActivity {
+    pub fn user_name(&self) -> &str {
+        self.user.as_ref().map(|u| u.name.as_str()).unwrap_or("Friend")
+    }
+
+    pub fn user_avatar(&self) -> Option<&str> {
+        self.user.as_ref().and_then(|u| u.image_url.as_deref())
+    }
+
+    pub fn track_title(&self) -> &str {
+        self.track.as_ref().map(|t| t.name.as_str()).unwrap_or("")
+    }
+
+    pub fn artist_name(&self) -> &str {
+        self.track.as_ref().and_then(|t| t.artist.as_ref()).map(|a| a.name.as_str()).unwrap_or("")
+    }
+
+    pub fn track_art(&self) -> Option<&str> {
+        self.track.as_ref().and_then(|t| t.image_url.as_deref())
+    }
+
+    pub fn context_name(&self) -> Option<&str> {
+        self.track.as_ref().and_then(|t| t.context.as_ref()).map(|c| c.name.as_str())
+            .or_else(|| self.track.as_ref().and_then(|t| t.album.as_ref()).map(|a| a.name.as_str()))
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct BuddyListResponse {
+    #[serde(default)]
+    friends: Vec<FriendActivity>,
+}
+
 pub struct Client {
     http: reqwest::Client,
     access_token: String,
@@ -302,6 +404,23 @@ impl Client {
             let _ = req.bearer_auth(&self.access_token).send().await;
         }
         Ok(())
+    }
+
+    /// Spotify Friend Activity feed: reads who is listening to what.
+    pub async fn buddylist(&self) -> Result<Vec<FriendActivity>> {
+        let url = "https://spclient.wg.spotify.com/presence-view/v1/buddylist";
+        let resp = self
+            .http
+            .get(url)
+            .bearer_auth(&self.access_token)
+            .header("Client-Token", &self.client_token)
+            .header("Spotify-App-Version", &self.client_version)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        let resp = resp.error_for_status().context("Spotify buddylist request failed")?;
+        let body: BuddyListResponse = resp.json().await?;
+        Ok(body.friends)
     }
 
     async fn page(&self, id: &str, offset: usize, limit: usize) -> Result<Value> {

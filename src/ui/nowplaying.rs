@@ -354,7 +354,7 @@ fn cover_column(app: &mut App, ui: &mut Ui, col: Rect, track: &crate::model::Tra
     let liked = app.liked.contains(&heard.id);
     let heart = Rect::from_center_size(pos2(art.right() - 55.0, info_y + 14.0), Vec2::splat(30.0));
     let sr = ui.interact(heart, ui.scope_id().with(("np-like", &heard.id)), Sense::click());
-    let sr = named(sr, if liked { "Aus Favoriten entfernen" } else { "Zu Favoriten hinzufügen" }).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let sr = named(sr, if liked { "Remove from favorites" } else { "Add to favorites" }).on_hover_cursor(egui::CursorIcon::PointingHand);
     let sh = theme::anim_bool(ui.ctx(), sr.id.with("h"), sr.hovered(), 0.1);
     let pop = theme::anim_bool(ui.ctx(), ("liked", &heard.id), liked, 0.3);
     // The same translucent disc as the ⋯ beside it, a little brighter once liked.

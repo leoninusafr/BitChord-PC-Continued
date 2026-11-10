@@ -92,6 +92,13 @@ pub enum NpTab {
 
 /// User intents collected while drawing; applied after the frame's UI pass.
 #[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum RightTab {
+    #[default]
+    Details,
+    Friends,
+}
+
 pub enum Action {
     Play(Vec<Track>, usize),
     PlayCollection(Target, bool),
@@ -110,6 +117,7 @@ pub enum Action {
     Like(Track, bool),
     /// Like (or unlike) a selection of songs.
     LikeMany(Vec<Track>, bool),
+    #[allow(dead_code)]
     Dislike(Track),
     Share(Target),
     AddToPlaylist(Vec<Track>),
@@ -122,6 +130,7 @@ pub enum Action {
     Collaborate,
     DeletePlaylist,
     SaveCollection(String, bool),
+    #[allow(dead_code)]
     HomeChip(Option<String>),
     OpenNowPlaying(bool),
     /// Into the mini player (true) or back to the full window.
@@ -135,11 +144,16 @@ pub enum Action {
     /// A song chosen on the search page as the Spotify transfer's match.
     TransferPick(Track),
     /// Toggle shuffle mode (on/off).
+    #[allow(dead_code)]
     ShuffleToggle,
     /// Play a completely random song from library/trending.
     PlayRandomSong,
     /// Toggle Spotify-style Now Playing Details panel on right.
     ToggleDetails,
+    /// Toggle Spotify Friend Activity panel on right.
+    ToggleFriends,
+    /// Result of loading Spotify friend activity.
+    FriendActivityLoaded(Result<Vec<crate::transfer::spotify::FriendActivity>, String>),
     /// Toggle Spotify Connect / Remote Control device modal.
     ToggleDevices,
     /// Play a single Spotify track matched to YouTube Music.
@@ -485,10 +499,15 @@ pub struct App {
     np_tab: NpTab,
     queue_open: bool,
     pub details_open: bool,
+    pub right_tab: RightTab,
     pub details_width: f32,
     pub sidebar_width: f32,
     pub followed_artists: HashSet<String>,
     pub spotify_two_way_sync: bool,
+    pub friend_activity: Vec<crate::transfer::spotify::FriendActivity>,
+    pub friend_activity_loading: bool,
+    pub friend_activity_error: Option<String>,
+    pub friend_activity_last_fetch: Option<std::time::Instant>,
     pub devices_open: bool,
     pub remote_server: Option<crate::remote::RemoteServer>,
     pub remote_qr: Option<egui::TextureHandle>,
@@ -798,10 +817,15 @@ impl App {
             np_tab: if get("np_art").is_some_and(|v| v == "1") { NpTab::Art } else { NpTab::Lyrics },
             queue_open: false,
             details_open: false,
+            right_tab: RightTab::Details,
             details_width: 340.0,
             sidebar_width: 250.0,
             followed_artists: Default::default(),
             spotify_two_way_sync: false,
+            friend_activity: Vec::new(),
+            friend_activity_loading: false,
+            friend_activity_error: None,
+            friend_activity_last_fetch: None,
             devices_open: false,
             remote_server: Some(crate::remote::RemoteServer::new()),
             remote_qr: None,
@@ -896,6 +920,29 @@ impl App {
         app.audio.set_normalize(app.normalize);
         app.set_crossfade();
         app
+    }
+
+    pub fn refresh_friend_activity(&mut self) {
+        if self.friend_activity_loading {
+            return;
+        }
+        let is_signed_in = matches!(*self.transfer.account.lock().unwrap(), crate::transfer::Account::SignedIn { .. });
+        if !is_signed_in {
+            return;
+        }
+        self.friend_activity_loading = true;
+        self.friend_activity_error = None;
+        self.friend_activity_last_fetch = Some(std::time::Instant::now());
+
+        let xfer = self.transfer.clone();
+        let b = self.backend.clone();
+        let bg_actions = self.bg_actions.clone();
+
+        self.backend.spawn(async move {
+            let res = xfer.fetch_friend_activity().await;
+            bg_actions.lock().unwrap().push(Action::FriendActivityLoaded(res));
+            b.wake();
+        });
     }
 
     // ---------------------------------------------------------------- navigation
@@ -1262,7 +1309,7 @@ impl App {
             thumb: t.thumbs.first().map(|th| th.url.clone()),
         };
         self.blocked_tracks.insert(t.id.clone(), blocked);
-        self.toast(format!("\"{}\" blockiert & übersprungen", title));
+        self.toast(format!("Blocked \"{}\"", title));
         if self.current_id() == Some(&t.id) {
             self.next();
         }
@@ -1271,14 +1318,14 @@ impl App {
     /// Unblock a previously blocked track.
     pub fn unblock_track(&mut self, id: &str) {
         if let Some(t) = self.blocked_tracks.remove(id) {
-            self.toast(format!("\"{}\" entblockt", t.title));
+            self.toast(format!("Unblocked \"{}\"", t.title));
         }
     }
 
     /// Permanently block an artist: skips current track if it matches.
     pub fn block_artist(&mut self, id: String, name: String) {
         self.blocked_artists.insert(id.clone(), crate::model::BlockedArtist { id, name: name.clone() });
-        self.toast(format!("Künstler \"{}\" blockiert", name));
+        self.toast(format!("Blocked artist \"{}\"", name));
         if let Some(curr) = self.current() {
             if self.is_track_blocked(curr) {
                 self.next();
@@ -1289,7 +1336,7 @@ impl App {
     /// Unblock a previously blocked artist.
     pub fn unblock_artist(&mut self, id: &str) {
         if let Some(a) = self.blocked_artists.remove(id) {
-            self.toast(format!("Künstler \"{}\" entblockt", a.name));
+            self.toast(format!("Unblocked artist \"{}\"", a.name));
         }
     }
 
@@ -1404,6 +1451,16 @@ impl eframe::App for App {
             self.upload_files(files);
         }
         transfer::poll(self, ctx, now);
+        if self.details_open && self.right_tab == RightTab::Friends {
+            let stale = self.friend_activity_last_fetch.is_none()
+                || self.friend_activity_last_fetch.unwrap().elapsed() > std::time::Duration::from_secs(30);
+            if stale {
+                self.refresh_friend_activity();
+            }
+            if !self.friend_activity.is_empty() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+        }
         if crate::deeplink::take_show() {
             self.show_window(ctx);
         }

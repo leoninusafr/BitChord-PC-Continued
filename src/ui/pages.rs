@@ -1075,6 +1075,7 @@ fn artist(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
     // failing that, the name in type. A lettered artist still has their signature
     // asked for, because it signs the About section below instead of the hero.
     let signature = app.signature_texture(ui.ctx(), &name);
+    let is_blocked = app.blocked_artists.contains_key(id);
     let Some(a) = &app.artist else { return };
     let acts = &mut app.actions;
     let top = &a.top;
@@ -1134,6 +1135,13 @@ fn artist(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
             && pill(ui, "Radio", Some(icon::RADIO), false).clicked() {
                 acts.push(Action::Radio(first.clone()));
             }
+        if is_blocked {
+            if pill(ui, "Unblock", None, false).clicked() {
+                acts.push(Action::UnblockArtist(id.to_owned()));
+            }
+        } else if pill(ui, "Block", None, false).clicked() {
+            acts.push(Action::BlockArtist(id.to_owned(), name.clone()));
+        }
     });
     if !top.is_empty() {
         ui.add_space(26.0);
@@ -1973,9 +1981,9 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
             }
         });
         divider(ui);
-        setting_row(ui, "Blockierte Inhalte", Some("Songs und Interpreten, die du blockiert hast. Sie werden beim Abspielen automatisch übersprungen."), |ui| {
+        setting_row(ui, "Blocked content", Some("Songs and artists you have blocked. They will be skipped automatically during playback."), |ui| {
             let count = app.blocked_tracks.len() + app.blocked_artists.len();
-            ui.label(RichText::new(format!("{count} blockiert")).color(theme::text_dim()));
+            ui.label(RichText::new(format!("{count} blocked")).color(theme::text_dim()));
         });
         if !app.blocked_tracks.is_empty() || !app.blocked_artists.is_empty() {
             ui.add_space(4.0);
@@ -1990,7 +1998,7 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
                         ui.label(RichText::new(&t.artist).font(theme::regular(11.0)).color(theme::text_dim()));
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(RichText::new("Entblocken").font(theme::regular(12.0))).clicked() {
+                        if ui.button(RichText::new("Unblock").font(theme::regular(12.0))).clicked() {
                             unblock_t = Some(id.clone());
                         }
                     });
@@ -2009,10 +2017,10 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
                     super::widgets::draw_minus_circle(ui, i_rect.center(), 7.0, Color32::from_rgb(239, 68, 68), 1.3);
                     ui.vertical(|ui| {
                         ui.label(RichText::new(&a.name).font(theme::semibold(13.0)).color(theme::text()));
-                        ui.label(RichText::new("Künstler blockiert").font(theme::regular(11.0)).color(theme::text_dim()));
+                        ui.label(RichText::new("Artist blocked").font(theme::regular(11.0)).color(theme::text_dim()));
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(RichText::new("Entblocken").font(theme::regular(12.0))).clicked() {
+                        if ui.button(RichText::new("Unblock").font(theme::regular(12.0))).clicked() {
                             unblock_a = Some(id.clone());
                         }
                     });

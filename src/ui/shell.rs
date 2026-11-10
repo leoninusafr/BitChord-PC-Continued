@@ -817,7 +817,22 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
         app.actions.push(Action::Go(Page::New));
     }
 
-    // 3. RIGHT SECTION: Remote Devices Button + Account Avatar
+    // 3. RIGHT SECTION: Friend Activity Button + Account Avatar
+    let is_friends_open = app.details_open && app.right_tab == super::RightTab::Friends;
+    let friends_r = Rect::from_center_size(pos2(right - 54.0, cy), Vec2::splat(32.0));
+    let f_resp = ui.interact(friends_r, ui.scope_id().with("top-friends"), Sense::click());
+    let f_resp = named(f_resp, "Friend Activity").on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Friend Activity");
+    let fh = theme::anim_bool(ui.ctx(), f_resp.id.with("fh"), f_resp.hovered() || is_friends_open, 0.12);
+    ui.painter().circle_filled(friends_r.center(), 16.0, theme::glass(if is_friends_open { 0.16 } else { 0.06 + 0.08 * fh }));
+    let fg = if is_friends_open { app.accent_color() } else { theme::lerp_color(theme::text_dim(), theme::text(), fh) };
+    glyphs::draw(ui, friends_r.center(), 18.0, glyphs::USERS, fg);
+    if is_friends_open {
+        ui.painter().circle_filled(pos2(friends_r.center().x, friends_r.bottom() + 1.0), 1.8, app.accent_color());
+    }
+    if f_resp.clicked() {
+        app.actions.push(Action::ToggleFriends);
+    }
+
     let acc_r = Rect::from_center_size(pos2(right - 18.0, cy), Vec2::splat(32.0));
     let resp = ui.interact(acc_r, ui.scope_id().with("account"), Sense::click());
     let resp = named(resp, "Account / Settings").on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -838,7 +853,7 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
     }
 
     if app.loading {
-        let spin = Rect::from_min_size(pos2(acc_r.left() - 28.0, cy - 10.0), Vec2::splat(20.0));
+        let spin = Rect::from_min_size(pos2(friends_r.left() - 28.0, cy - 10.0), Vec2::splat(20.0));
         let mut cui = ui.new_child(egui::UiBuilder::new().max_rect(spin));
         cui.spinner();
     }
@@ -1425,12 +1440,30 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
         tool_x -= 30.0;
     }
 
+    // Friend Activity Button (Spotify Users icon)
+    if !compact {
+        let is_friends_open = app.details_open && app.right_tab == super::RightTab::Friends;
+        let tip = if is_friends_open { "Hide friend activity" } else { "Friend activity" };
+        let r = rbtn(ui, tool_x, "friends", tip);
+        let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered() || is_friends_open, 0.15);
+        let icon_fg = if is_friends_open { accent } else { ink(h) };
+        glyphs::draw(ui, r.rect.center(), 18.0, glyphs::USERS, icon_fg);
+        if is_friends_open {
+            ui.painter().circle_filled(pos2(r.rect.center().x, r.rect.bottom() + 1.0), 1.8, accent);
+        }
+        if r.clicked() {
+            app.actions.push(Action::ToggleFriends);
+        }
+        tool_x -= 30.0;
+    }
+
     // Details ("Now playing view" - Spotify style)
     if !compact {
-        let tip = if app.details_open { "Hide now playing view" } else { "Now playing view" };
+        let is_details_open = app.details_open && app.right_tab == super::RightTab::Details;
+        let tip = if is_details_open { "Hide now playing view" } else { "Now playing view" };
         let r = rbtn(ui, tool_x, "details", tip);
-        let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered() || app.details_open, 0.15);
-        let icon_fg = if app.details_open { accent } else { ink(h) };
+        let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered() || is_details_open, 0.15);
+        let icon_fg = if is_details_open { accent } else { ink(h) };
 
         // Authentic Spotify-style Now Playing View screen/sidebar icon
         let center = r.rect.center();
@@ -1440,7 +1473,7 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
         ui.painter().rect_stroke(screen_box, 2.5, egui::Stroke::new(1.3, icon_fg), egui::StrokeKind::Inside);
         let split_x = screen_box.right() - 5.5;
         ui.painter().vline(split_x, (screen_box.top() + 1.0)..=(screen_box.bottom() - 1.0), egui::Stroke::new(1.3, icon_fg));
-        if app.details_open {
+        if is_details_open {
             let right_panel = Rect::from_min_max(pos2(split_x + 1.0, screen_box.top() + 1.5), pos2(screen_box.right() - 1.5, screen_box.bottom() - 1.5));
             ui.painter().rect_filled(right_panel, 1.0, accent);
             // Spotify active indicator dot underneath
@@ -1448,9 +1481,6 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
         }
 
         if r.clicked() {
-            if !app.details_open {
-                app.queue_open = false;
-            }
             app.actions.push(Action::ToggleDetails);
         }
         tool_x -= 30.0;

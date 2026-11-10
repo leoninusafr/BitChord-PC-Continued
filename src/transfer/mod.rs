@@ -217,6 +217,7 @@ pub struct Transfer {
     review_done: tokio::sync::Notify,
     data_dir: PathBuf,
     wake: Arc<dyn Fn() + Send + Sync>,
+    spotify_client: Mutex<Option<(Instant, Arc<spotify::Client>)>>,
 }
 
 /// The progress file: everything needed to pick a transfer up again.
@@ -254,6 +255,7 @@ impl Transfer {
             review_done: tokio::sync::Notify::new(),
             data_dir: data_dir.to_owned(),
             wake,
+            spotify_client: Mutex::new(None),
         });
         *this.resumable.lock().unwrap() = this.find_resumable();
         this
@@ -286,6 +288,7 @@ impl Transfer {
 
     /// Sign the Spotify side in or out; `None` signs out.
     pub fn set_cookie(self: &Arc<Self>, sp_dc: Option<String>, rt: &crate::backend::Backend) {
+        *self.spotify_client.lock().unwrap() = None;
         match sp_dc {
             Some(c) => {
                 if let Err(e) = crate::vault::set(VAULT, &self.data_dir, c.as_bytes()) {
@@ -432,6 +435,40 @@ impl Transfer {
     pub fn refresh_spotify_library(self: &Arc<Self>, rt: &crate::backend::Backend) {
         if matches!(*self.account.lock().unwrap(), Account::SignedIn { .. }) {
             self.load_account(rt);
+        }
+    }
+
+    /// Returns a cached or newly connected Spotify client for the signed-in user.
+    pub async fn spotify_client(&self) -> Result<Arc<spotify::Client>> {
+        let cookie = self.cookie().ok_or_else(|| anyhow::anyhow!("Not signed in to Spotify"))?;
+        {
+            let guard = self.spotify_client.lock().unwrap();
+            if let Some((created, client)) = guard.as_ref() {
+                if created.elapsed() < Duration::from_secs(45 * 60) {
+                    return Ok(client.clone());
+                }
+            }
+        }
+        let client = Arc::new(spotify::Client::connect(Some(&cookie), &self.data_dir).await?);
+        *self.spotify_client.lock().unwrap() = Some((Instant::now(), client.clone()));
+        Ok(client)
+    }
+
+    /// Fetch Spotify friend activity for the signed-in user.
+    pub async fn fetch_friend_activity(&self) -> Result<Vec<spotify::FriendActivity>, String> {
+        let _cookie = self.cookie().ok_or_else(|| "Not signed in to Spotify".to_string())?;
+        let client = match self.spotify_client().await {
+            Ok(c) => c,
+            Err(e) => return Err(e.to_string()),
+        };
+        match client.buddylist().await {
+            Ok(friends) => Ok(friends),
+            Err(_e) => {
+                // Invalidate cache and retry once with a fresh connect
+                *self.spotify_client.lock().unwrap() = None;
+                let fresh_client = self.spotify_client().await.map_err(|err| err.to_string())?;
+                fresh_client.buddylist().await.map_err(|err| err.to_string())
+            }
         }
     }
 

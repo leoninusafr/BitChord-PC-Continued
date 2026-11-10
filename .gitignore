@@ -11,3 +11,4 @@ server/node_modules/
 .playwright-cli/
 target-bisect/
 mobile-ref/
+*.zip
