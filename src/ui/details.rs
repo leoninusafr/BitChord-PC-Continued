@@ -7,7 +7,7 @@ use egui::{Align2, Color32, Rect, Sense, Ui, Vec2, pos2, vec2};
 use super::widgets::{named, paint_cover};
 use super::{Action, App, NpTab, glyphs};
 use crate::model::Target;
-use crate::theme::{self, icon};
+use crate::theme;
 
 pub fn details_panel(app: &mut App, ui: &mut Ui) {
     let track = app.shown().cloned().or_else(|| app.current().cloned());
@@ -21,39 +21,25 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
     };
 
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(super::titlebar::right_gap(ui.ctx(), ui.max_rect(), 0.0));
-            let (c_rect, c_resp) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
-            let c_resp = named(c_resp, "Close").on_hover_cursor(egui::CursorIcon::PointingHand);
-            let ch = theme::anim_bool(ui.ctx(), c_resp.id.with("ch"), c_resp.hovered(), 0.15);
-            ui.painter().circle_filled(c_rect.center(), 13.0, theme::glass(0.08 + 0.12 * ch));
-            super::widgets::icon_at(ui, c_rect.center(), icon::X, 13.0, theme::lerp_color(theme::text_dim(), theme::text(), ch));
-            if c_resp.clicked() {
-                app.details_open = false;
+        let avail_w = (ui.available_width() - 8.0).max(10.0);
+        let (h_box, _) = ui.allocate_exact_size(vec2(avail_w, 24.0), Sense::hover());
+        let is_link = header_target.is_some();
+        let (_, h_resp) = super::widgets::marquee_title(
+            ui,
+            ui.scope_id().with("details-header-title"),
+            h_box,
+            header_title,
+            theme::bold(17.0),
+            theme::text(),
+            false,
+            is_link,
+        );
+        if let Some(target) = header_target {
+            let h_resp = h_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            if h_resp.clicked() {
+                app.actions.push(Action::Open(target));
             }
-
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let avail_w = (ui.available_width() - 8.0).max(10.0);
-                let (h_box, _) = ui.allocate_exact_size(vec2(avail_w, 24.0), Sense::hover());
-                let is_link = header_target.is_some();
-                let (_, h_resp) = super::widgets::marquee_title(
-                    ui,
-                    ui.scope_id().with("details-header-title"),
-                    h_box,
-                    header_title,
-                    theme::bold(18.0),
-                    theme::text(),
-                    false,
-                    is_link,
-                );
-                if let Some(target) = header_target {
-                    let h_resp = h_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if h_resp.clicked() {
-                        app.actions.push(Action::Open(target));
-                    }
-                }
-            });
-        });
+        }
     });
     ui.add_space(10.0);
 
@@ -145,7 +131,8 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                 let bh = theme::anim_bool(ui.ctx(), b_resp.id.with("bh"), b_resp.hovered(), 0.15);
                 let b_fg = if is_blocked { Color32::from_rgb(239, 68, 68) } else { theme::lerp_color(theme::text_dim(), theme::text(), bh) };
-                super::widgets::draw_minus_circle(ui, b_rect.center(), 8.5, b_fg, 1.3);
+                let center = pos2(b_rect.center().x.round(), b_rect.center().y.round());
+                super::widgets::draw_minus_circle(ui, center, 7.2, b_fg, 1.2);
                 if b_resp.clicked() {
                     if is_blocked {
                         app.actions.push(Action::UnblockTrack(t.id.clone()));
@@ -167,9 +154,9 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
                     let ah = theme::anim_bool(ui.ctx(), a_resp.id.with("ah"), a_resp.hovered(), 0.12);
                     let a_color = theme::lerp_color(theme::text_dim(), theme::text(), ah);
                     ui.painter().galley(a_rect.left_top(), galley, a_color);
-                    // Underline only under the artist's name, 1.5px below baseline
+                    // Underline only under the artist's name, snapped to text baseline
                     if ah > 0.0 {
-                        ui.painter().hline(a_rect.left()..=a_rect.right(), a_rect.bottom() + 1.5, egui::Stroke::new(1.0, a_color));
+                        ui.painter().hline(a_rect.left()..=a_rect.right(), (a_rect.bottom() + 0.5).round(), egui::Stroke::new(1.0, a_color));
                     }
                     if a_resp.clicked() && let Some(id) = &a.id {
                         app.actions.push(Action::Open(Target::Artist(id.clone())));
@@ -187,7 +174,7 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
             let artist_name = t.artists.first().map(|a| a.name.as_str()).unwrap_or("Artist");
             let artist_id = t.artists.first().and_then(|a| a.id.clone());
 
-            let (card_rect, card_resp) = ui.allocate_exact_size(vec2(width, 96.0), Sense::click());
+            let (card_rect, card_resp) = ui.allocate_exact_size(vec2(width, 114.0), Sense::click());
             let ch = theme::anim_bool(ui.ctx(), card_resp.id.with("ch"), card_resp.hovered(), 0.15);
             ui.painter().rect_filled(card_rect, 10.0, theme::panel(0.48 + 0.14 * ch));
             ui.painter().rect_stroke(card_rect, 10.0, egui::Stroke::new(1.0, theme::glass(0.12)), egui::StrokeKind::Inside);
@@ -210,10 +197,10 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
             let an_color = theme::lerp_color(theme::text(), Color32::WHITE, anh);
             ui.painter().galley(name_r.left_top(), name_g, an_color);
             if anh > 0.0 {
-                ui.painter().hline(name_r.left()..=name_r.right(), name_r.bottom() + 1.5, egui::Stroke::new(1.0, an_color));
+                ui.painter().hline(name_r.left()..=name_r.right(), (name_r.bottom() + 0.5).round(), egui::Stroke::new(1.0, an_color));
             }
 
-            // Spotify-style "Follow" / "Following" pill button inside card
+            // Spotify-style "Follow" / "Following" pill button inside card (generous 16px gap below name)
             let is_following = app.followed_artists.contains(artist_name);
             let btn_size = vec2(96.0, 28.0);
             let btn_rect = Rect::from_min_size(pos2(text_rect.left(), text_rect.bottom() - btn_size.y), btn_size);
@@ -296,36 +283,80 @@ pub fn details_panel(app: &mut App, ui: &mut Ui) {
                 ui.add_space(14.0);
             }
 
-            // 5. "Lyrics" Preview card
+            // 5. Live Synced Lyrics Preview card (Spotify-style)
             ui.label(egui::RichText::new("Lyrics").font(theme::bold(14.0)).color(theme::text()));
             ui.add_space(6.0);
 
-            let (lyric_rect, lyric_resp) = ui.allocate_exact_size(vec2(width, 110.0), Sense::click());
+            let (lyric_rect, lyric_resp) = ui.allocate_exact_size(vec2(width, 140.0), Sense::click());
             let lh = theme::anim_bool(ui.ctx(), lyric_resp.id.with("lh"), lyric_resp.hovered(), 0.15);
-            ui.painter().rect_filled(lyric_rect, 10.0, theme::panel(0.4 + 0.1 * lh));
+            ui.painter().rect_filled(lyric_rect, 10.0, theme::panel(0.42 + 0.12 * lh));
             ui.painter().rect_stroke(lyric_rect, 10.0, egui::Stroke::new(1.0, theme::glass(0.12)), egui::StrokeKind::Inside);
 
-            let inner_l = lyric_rect.shrink(12.0);
+            let inner_l = lyric_rect.shrink(14.0);
             let curr_id = Some(t.id.as_str());
-            let sample_lyrics = if let Some((lid, lset)) = &app.lyrics
+
+            if app.playing() {
+                // Keep lyrics preview synced smoothly while song is playing
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            }
+
+            let mut showed_synced = false;
+            if let Some((lid, lset)) = &app.lyrics
                 && curr_id == Some(lid.as_str())
+                && let Some(lyrics) = app.lyric_prefs.choose(lid, lset).and_then(|p| lset.get(p))
+                && !lyrics.lines.is_empty()
             {
-                lset.sources.first().and_then(|src| src.lines.first().map(|l| l.text.clone()))
-                    .unwrap_or_else(|| "Click here to view full lyrics…".to_string())
-            } else {
-                "Lyrics are loading or available…".to_string()
-            };
+                let cur_ms = app.audio.status.position().as_millis() as i32;
+                let active_idx = lyrics.lines.iter().rposition(|l| l.start <= cur_ms).unwrap_or(0);
 
-            ui.painter().text(
-                inner_l.left_top(),
-                Align2::LEFT_TOP,
-                &sample_lyrics,
-                theme::semibold(14.0),
-                theme::text(),
-            );
+                let mut y_cursor = inner_l.top();
 
-            let expand_btn = Rect::from_min_size(pos2(inner_l.left(), inner_l.bottom() - 26.0), vec2(140.0, 24.0));
-            ui.painter().rect_filled(expand_btn, 12.0, theme::glass(0.15));
+                // If active line has a predecessor, show it subtly
+                if active_idx > 0 && let Some(prev) = lyrics.lines.get(active_idx - 1) {
+                    if !prev.text.trim().is_empty() {
+                        let prev_g = super::widgets::galley(ui, &prev.text, theme::regular(12.5), theme::text_faint(), inner_l.width());
+                        ui.painter().galley(pos2(inner_l.left(), y_cursor), prev_g, theme::text_faint());
+                        y_cursor += 18.0;
+                    }
+                }
+
+                // Active line (prominent, bold, illuminated in white)
+                if let Some(curr) = lyrics.lines.get(active_idx) {
+                    let text = if curr.text.trim().is_empty() { "♫" } else { &curr.text };
+                    let curr_g = super::widgets::galley(ui, text, theme::bold(15.0), Color32::WHITE, inner_l.width());
+                    ui.painter().galley(pos2(inner_l.left(), y_cursor), curr_g, Color32::WHITE);
+                    y_cursor += 22.0;
+                }
+
+                // Next line (dim)
+                if let Some(next) = lyrics.lines.get(active_idx + 1) {
+                    if !next.text.trim().is_empty() {
+                        let next_g = super::widgets::galley(ui, &next.text, theme::regular(13.0), theme::text_dim(), inner_l.width());
+                        ui.painter().galley(pos2(inner_l.left(), y_cursor), next_g, theme::text_dim());
+                    }
+                }
+
+                showed_synced = true;
+            }
+
+            if !showed_synced {
+                let sample_lyrics = if app.loading {
+                    "Loading lyrics…".to_string()
+                } else {
+                    "Click to view lyrics & sing along…".to_string()
+                };
+                ui.painter().text(
+                    inner_l.left_top(),
+                    Align2::LEFT_TOP,
+                    &sample_lyrics,
+                    theme::semibold(14.0),
+                    theme::text_dim(),
+                );
+            }
+
+            let expand_btn = Rect::from_min_size(pos2(inner_l.left(), inner_l.bottom() - 24.0), vec2(130.0, 24.0));
+            let eh = theme::anim_bool(ui.ctx(), lyric_resp.id.with("eh"), lyric_resp.hovered(), 0.15);
+            ui.painter().rect_filled(expand_btn, 12.0, theme::glass(0.14 + 0.10 * eh));
             ui.painter().text(
                 expand_btn.center(),
                 Align2::CENTER_CENTER,

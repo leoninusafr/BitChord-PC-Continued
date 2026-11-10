@@ -61,6 +61,7 @@ pub fn page(app: &mut App, ui: &mut Ui, now: f64) {
     }
     let out = area.show(ui, |ui| {
         ui.set_max_width((ui.available_width() - 20.0).max(0.0));
+        ui.add_space(52.0);
         match &page {
             Page::Home => home(app, ui, now),
             Page::New => new(app, ui, now),
@@ -73,8 +74,12 @@ pub fn page(app: &mut App, ui: &mut Ui, now: f64) {
             Page::Transfer => super::transfer::page(app, ui, now),
             Page::Jam => super::jam::page(app, ui),
         }
-        // Room to scroll the last rows clear of the player's frosted strip.
-        ui.add_space(96.0);
+        // Extra bottom spacing so content doesn't end abruptly at the bottom edge.
+        if page == Page::Settings {
+            ui.add_space(16.0);
+        } else {
+            ui.add_space(40.0);
+        }
     });
     selection_bar(app, ui.ctx(), &page, out.inner_rect);
     // Infinite scroll on home: fetch the next shelves when nearing the bottom.
@@ -1772,7 +1777,7 @@ fn settings(app: &mut App, ui: &mut Ui) {
         ui.vertical(|ui| {
             ui.set_width(w);
             settings_body(app, ui);
-            ui.add_space(40.0);
+            ui.add_space(16.0);
         });
     });
 }
@@ -2683,9 +2688,9 @@ pub(super) fn divider(ui: &mut Ui) {
     ui.painter().rect_filled(rect, 0.0, theme::glass(0.07));
 }
 
-/// On/off switch with mobile liquid physics, accent glow and tactile stretch.
+/// Modern elongated mobile switch with Material 3 / iOS liquid physics, size-morphing knob and accent glow.
 pub(super) fn toggle(ui: &mut Ui, on: &mut bool, name: &str) -> egui::Response {
-    let (rect, mut resp) = ui.allocate_exact_size(vec2(44.0, 26.0), Sense::click());
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(50.0, 28.0), Sense::click());
     if resp.clicked() {
         *on = !*on;
         resp.mark_changed();
@@ -2693,30 +2698,36 @@ pub(super) fn toggle(ui: &mut Ui, on: &mut bool, name: &str) -> egui::Response {
     let value = *on;
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), value, name));
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let t = theme::anim_bool(ui.ctx(), resp.id.with("t"), value, 0.20);
+    let t = theme::anim_bool(ui.ctx(), resp.id.with("t"), value, 0.22);
     let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered(), 0.12);
     let accent = ui.ctx().data(|d| d.get_temp::<Color32>(egui::Id::unique("accent"))).unwrap_or(theme::RED);
     let fade = if ui.is_enabled() { 1.0 } else { 0.4 };
 
     // Subtly glow when active
     if t > 0.05 {
-        super::widgets::soft_shadow(ui, rect, 13.0, 10.0, 0.22 * t * fade);
+        super::widgets::soft_shadow(ui, rect, 14.0, 10.0, 0.25 * t * fade);
     }
 
-    let off = theme::glass(0.16 + 0.06 * h);
-    ui.painter().rect_filled(rect, 13.0, theme::with_alpha(theme::lerp_color(off, accent, t), fade));
+    let off = theme::glass(0.12 + 0.06 * h);
+    ui.painter().rect_filled(rect, 14.0, theme::with_alpha(theme::lerp_color(off, accent, t), fade));
+    if t < 0.95 {
+        let border_alpha = (1.0 - t) * 0.20;
+        ui.painter().rect_stroke(rect, 14.0, egui::Stroke::new(1.2, theme::glass(border_alpha)), egui::StrokeKind::Inside);
+    }
 
-    // Liquid stretch when pressed
+    // Modern mobile size-morphing knob: 16px off -> 22px on, with liquid stretch when pressed
     let pressing = resp.is_pointer_button_down_on();
     let stretch_x = if pressing { 1.25 } else { 1.0 };
-    let knob_w = 20.0 * stretch_x;
-    let knob_h = 20.0;
-    let knob_center_x = egui::lerp((rect.left() + 13.0)..=(rect.right() - 13.0), t);
+    let knob_size = egui::lerp(16.0..=22.0, t);
+    let knob_w = knob_size * stretch_x;
+    let knob_h = knob_size;
+    let knob_center_x = egui::lerp((rect.left() + 14.0)..=(rect.right() - 14.0), t);
     let knob_rect = Rect::from_center_size(pos2(knob_center_x, rect.center().y), vec2(knob_w, knob_h));
+    let knob_color = theme::lerp_color(theme::text_dim(), Color32::WHITE, t);
 
-    // Knob drop shadow & crisp white surface
-    ui.painter().rect_filled(knob_rect.translate(vec2(0.0, 1.2)), 10.0, theme::shade(0.28 * fade));
-    ui.painter().rect_filled(knob_rect, 10.0, theme::with_alpha(Color32::WHITE, fade));
+    // Knob drop shadow & surface
+    ui.painter().rect_filled(knob_rect.translate(vec2(0.0, 1.2)), knob_h / 2.0, theme::shade(0.30 * fade));
+    ui.painter().rect_filled(knob_rect, knob_h / 2.0, theme::with_alpha(knob_color, fade));
     resp
 }
 

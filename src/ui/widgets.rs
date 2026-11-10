@@ -122,7 +122,8 @@ pub fn marquee_title(
         let text_pos = pos2(actual_rect.left(), actual_rect.top() + (actual_rect.height() - text_h) / 2.0);
         ui.painter().galley(text_pos, full_galley, color);
         if resp.hovered() && underline_on_hover {
-            ui.painter().hline(actual_rect.left()..=(actual_rect.left() + text_w), actual_rect.bottom() - 1.0, egui::Stroke::new(1.0, color));
+            let line_y = (text_pos.y + text_h + 0.5).round();
+            ui.painter().hline(actual_rect.left()..=(actual_rect.left() + text_w), line_y, egui::Stroke::new(1.0, color));
         }
         return (actual_rect, resp);
     }
@@ -167,7 +168,8 @@ pub fn marquee_title(
     painter.galley(text_pos, full_galley, color);
 
     if hovered && underline_on_hover {
-        painter.hline(actual_rect.left()..=actual_rect.right(), actual_rect.bottom() - 1.0, egui::Stroke::new(1.0, color));
+        let line_y = (text_pos.y + text_h + 0.5).round();
+        painter.hline(actual_rect.left()..=actual_rect.right(), line_y, egui::Stroke::new(1.0, color));
     }
 
     (actual_rect, resp)
@@ -728,8 +730,9 @@ fn menu_action_star(ui: &mut Ui, liked: bool, label: &str) -> bool {
 
 /// Draw Spotify-style minus circle icon (⊖)
 pub fn draw_minus_circle(ui: &Ui, center: Pos2, radius: f32, stroke_color: Color32, stroke_width: f32) {
+    let center = pos2(center.x.round(), center.y.round());
     ui.painter().circle_stroke(center, radius, egui::Stroke::new(stroke_width, stroke_color));
-    let bar_half_w = radius * 0.55;
+    let bar_half_w = (radius * 0.52).round();
     ui.painter().hline((center.x - bar_half_w)..=(center.x + bar_half_w), center.y, egui::Stroke::new(stroke_width, stroke_color));
 }
 

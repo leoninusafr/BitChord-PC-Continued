@@ -166,6 +166,7 @@ pub fn sidebar_collapse(app: &App, ctx: &egui::Context) -> f32 {
 
 /// The small chevron pair that walks the page history, on the logo's line at the rail's
 /// top right.
+#[allow(dead_code)]
 fn history_button(ui: &mut Ui, glyph: char, name: &str) -> bool {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
     let resp = named(resp, name).on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -208,18 +209,6 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
         }
         // Drifts to the rail's edge as it collapses.
         ui.add_space(((ui.available_width() - 84.0) * (1.0 - t)).max(0.0));
-        ui.spacing_mut().item_spacing.x = 4.0;
-        if a > 0.3 {
-            if history_button(ui, icon::CHEVRON_LEFT, "Back") {
-                app.nav_back();
-            }
-            if history_button(ui, icon::CHEVRON_RIGHT, "Forward") {
-                app.nav_forward();
-            }
-            if history_button(ui, icon::SHRINK, "Collapse sidebar (Ctrl+B)") {
-                app.sidebar_collapsed = true;
-            }
-        }
     });
     ui.add_space(14.0);
 
@@ -619,22 +608,22 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
 
 // ------------------------------------------------------------------ top bar
 
-pub fn top_bar(app: &mut App, ui: &mut Ui) {
+pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
     app.search_rect = None;
-    let panel = ui.max_rect();
+    let panel = top_rect;
     let row = Rect::from_min_size(panel.min, vec2(panel.width(), 44.0));
     let right_gap = super::titlebar::right_gap(ui.ctx(), row, 20.0);
     let cy = panel.top() + 18.0;
 
-    // Floating Frosted Glass Backdrop (Step 18):
+    // Floating Frosted Glass Backdrop:
     // Smooth translucent liquid glass so content scrolling underneath remains softly visible
     let glass_rect = Rect::from_min_max(
         pos2(panel.left() - 28.0, panel.top() - 14.0),
         pos2(panel.right() + 28.0, row.bottom() + 6.0),
     );
-    ui.painter().rect_filled(glass_rect, 0.0, theme::glass(0.14));
-    ui.painter().rect_filled(glass_rect, 0.0, theme::shade(0.16));
-    ui.painter().hline(glass_rect.x_range(), glass_rect.bottom(), egui::Stroke::new(1.0, theme::glass(0.06)));
+    ui.painter().rect_filled(glass_rect, 0.0, theme::panel(0.82));
+    ui.painter().rect_filled(glass_rect, 0.0, theme::glass(0.08));
+    ui.painter().hline(glass_rect.x_range(), glass_rect.bottom(), egui::Stroke::new(1.0, theme::glass(0.12)));
 
     // 1. LEFT SECTION: Back, Forward, Spicetify Random Song Dice ("Würfel")
     let left_start = panel.left();
@@ -644,8 +633,8 @@ pub fn top_bar(app: &mut App, ui: &mut Ui) {
         let resp = named(resp, tip).on_hover_text(tip);
         let resp = if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
         let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered() && enabled, 0.12);
-        ui.painter().circle_filled(r.center(), 14.0, theme::glass(0.06 + 0.10 * h));
-        let fg = if enabled { theme::lerp_color(theme::text_dim(), theme::text(), h) } else { theme::text_faint().gamma_multiply(0.35) };
+        ui.painter().circle_filled(r.center(), 14.0, theme::glass(if enabled { 0.06 + 0.10 * h } else { 0.03 }));
+        let fg = if enabled { theme::lerp_color(theme::text_dim(), theme::text(), h) } else { theme::with_alpha(theme::text_dim(), 0.35) };
         icon_at(ui, r.center(), icon_char, 16.0, fg);
         resp
     };
@@ -1071,10 +1060,10 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
     let full = ui.max_rect();
     let ctx = ui.ctx().clone();
 
-    // Mobile-inspired Frosted Liquid Glass surface across the full-width player bar
-    let glass_surface = Color32::from_rgba_unmultiplied(16, 15, 20, 140);
-    ui.painter().rect_filled(full, 0.0, glass_surface);
-    ui.painter().hline(full.x_range(), full.top(), egui::Stroke::new(1.0, theme::glass(0.16)));
+    // Frosted Liquid Glass surface across the full-width player bar
+    ui.painter().rect_filled(full, 0.0, theme::panel(0.68));
+    ui.painter().rect_filled(full, 0.0, theme::glass(0.06));
+    ui.painter().hline(full.x_range(), full.top(), egui::Stroke::new(1.0, theme::glass(0.12)));
 
     let status = app.audio.status.clone();
     let hold = app.mix_hold().map(|h| (h.total, h.mix, app.mix_hold_pos(h)));
@@ -1536,7 +1525,7 @@ fn volume_slider_apple(app: &mut App, ui: &mut Ui, slider: Rect, speaker: Rect, 
     if sresp.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
-            app.audio.set_volume((vol + scroll / 700.0).clamp(0.0, 1.0));
+            app.audio.set_volume((vol + scroll / 1050.0).clamp(0.0, 1.0));
         }
     }
     if sresp.clicked() {
@@ -1590,7 +1579,7 @@ fn volume_slider_apple(app: &mut App, ui: &mut Ui, slider: Rect, speaker: Rect, 
     if vresp.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
-            app.audio.set_volume((vol + scroll / 700.0).clamp(0.0, 1.0));
+            app.audio.set_volume((vol + scroll / 1050.0).clamp(0.0, 1.0));
         }
     }
 }
@@ -1622,9 +1611,7 @@ pub fn queue_list(app: &mut App, ui: &mut Ui, salt: &str) {
         }
         let start = app.queue.index.unwrap_or(0);
         ui.horizontal(|ui| {
-            super::pages::toggle(ui, &mut app.autoplay, "Autoplay similar songs");
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("Autoplay similar songs").color(theme::text_dim()).size(13.0));
+            ui.checkbox(&mut app.autoplay, "Autoplay similar songs");
         });
         ui.add_space(8.0);
         let pitch = widgets::ROW_H + ui.spacing().item_spacing.y;

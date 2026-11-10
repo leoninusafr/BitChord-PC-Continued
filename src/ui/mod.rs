@@ -1570,9 +1570,15 @@ impl eframe::App for App {
             // The logo's row is 32 points tall.
             let side_margin = egui::Margin { left: 14, right: 14, top: titlebar::top_margin(16, 32.0), bottom: 16 };
             let side_frame = match app_style.sidebar {
-                SidebarStyle::Glass => egui::Frame::new().fill(theme::panel(side_alpha.max(0.35))).inner_margin(side_margin),
+                SidebarStyle::Glass => egui::Frame::new()
+                    .fill(theme::panel(side_alpha.max(0.35)))
+                    .corner_radius(egui::CornerRadius { nw: 0, ne: 12, sw: 0, se: 12 })
+                    .inner_margin(side_margin),
                 SidebarStyle::Transparent => egui::Frame::new().inner_margin(side_margin),
-                SidebarStyle::Solid => egui::Frame::new().fill(look.solid()).inner_margin(side_margin),
+                SidebarStyle::Solid => egui::Frame::new()
+                    .fill(look.solid())
+                    .corner_radius(egui::CornerRadius { nw: 0, ne: 12, sw: 0, se: 12 })
+                    .inner_margin(side_margin),
                 SidebarStyle::Floating => egui::Frame::new()
                     .fill(theme::panel(side_alpha.max(0.35)))
                     .stroke(egui::Stroke::new(1.0, theme::glass(0.10)))
@@ -1625,7 +1631,11 @@ impl eframe::App for App {
             if q > 0.01 {
                 egui::Panel::right("queue").resizable(false)
                     .exact_size(340.0 * q)
-                    .frame(egui::Frame::new().fill(theme::panel(0.42)).inner_margin(egui::Margin::symmetric(14, 16)))
+                    .frame(egui::Frame::new()
+                        .fill(theme::panel(0.48))
+                        .corner_radius(egui::CornerRadius { nw: 12, ne: 0, sw: 12, se: 0 })
+                        .stroke(egui::Stroke::new(1.0, theme::glass(0.10)))
+                        .inner_margin(egui::Margin::symmetric(14, 16)))
                     .show_separator_line(false)
                     .show(ui, |ui| shell::queue_drawer(self, ui));
             }
@@ -1636,7 +1646,11 @@ impl eframe::App for App {
                     .resizable(true)
                     .size_range((260.0 * d)..=(520.0 * d))
                     .default_size(target_w * d)
-                    .frame(egui::Frame::new().fill(theme::panel(0.42)).inner_margin(egui::Margin::symmetric(14, 16)))
+                    .frame(egui::Frame::new()
+                        .fill(theme::panel(0.48))
+                        .corner_radius(egui::CornerRadius { nw: 12, ne: 0, sw: 12, se: 0 })
+                        .stroke(egui::Stroke::new(1.0, theme::glass(0.10)))
+                        .inner_margin(egui::Margin::symmetric(14, 16)))
                     .show_separator_line(false)
                     .show(ui, |ui| {
                         let w = ui.available_width();
@@ -1647,11 +1661,11 @@ impl eframe::App for App {
                     });
             }
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().inner_margin(egui::Margin { left: 28, right: 28, top: titlebar::top_margin(14, 42.0), bottom: 12 }))
+                .frame(egui::Frame::new().inner_margin(egui::Margin { left: 28, right: 28, top: titlebar::top_margin(14, 42.0), bottom: 0 }))
                 .show(ui, |ui| {
-                    shell::top_bar(self, ui);
-                    ui.add_space(2.0);
+                    let top_rect = ui.max_rect();
                     pages::page(self, ui, now);
+                    shell::top_bar(self, ui, top_rect);
                 });
         }
         if np > 0.001 {
