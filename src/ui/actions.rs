@@ -73,7 +73,8 @@ impl App {
             Action::FriendActivityLoaded(res) => {
                 self.friend_activity_loading = false;
                 match res {
-                    Ok(friends) => {
+                    Ok(mut friends) => {
+                        friends.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
                         self.friend_activity = friends;
                         self.friend_activity_error = None;
                     }

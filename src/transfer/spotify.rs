@@ -409,18 +409,37 @@ impl Client {
     /// Spotify Friend Activity feed: reads who is listening to what.
     pub async fn buddylist(&self) -> Result<Vec<FriendActivity>> {
         let url = "https://spclient.wg.spotify.com/presence-view/v1/buddylist";
-        let resp = self
+        let req = self
             .http
             .get(url)
             .bearer_auth(&self.access_token)
             .header("Client-Token", &self.client_token)
             .header("Spotify-App-Version", &self.client_version)
-            .header("Accept", "application/json")
-            .send()
-            .await?;
-        let resp = resp.error_for_status().context("Spotify buddylist request failed")?;
+            .header("Cache-Control", "no-cache, no-store, must-revalidate")
+            .header("Pragma", "no-cache")
+            .header("Accept", "application/json");
+        let resp = match req.send().await.and_then(|r| r.error_for_status()) {
+            Ok(r) => r,
+            Err(_) => {
+                // Regional fallback
+                self.http
+                    .get("https://guc-spclient.spotify.com/presence-view/v1/buddylist")
+                    .bearer_auth(&self.access_token)
+                    .header("Client-Token", &self.client_token)
+                    .header("Spotify-App-Version", &self.client_version)
+                    .header("Cache-Control", "no-cache, no-store, must-revalidate")
+                    .header("Pragma", "no-cache")
+                    .header("Accept", "application/json")
+                    .send()
+                    .await?
+                    .error_for_status()
+                    .context("Spotify buddylist request failed")?
+            }
+        };
         let body: BuddyListResponse = resp.json().await?;
-        Ok(body.friends)
+        let mut friends = body.friends;
+        friends.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        Ok(friends)
     }
 
     async fn page(&self, id: &str, offset: usize, limit: usize) -> Result<Value> {

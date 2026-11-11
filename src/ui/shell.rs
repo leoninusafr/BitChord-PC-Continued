@@ -1442,23 +1442,6 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
         tool_x -= 30.0;
     }
 
-    // Friend Activity Button (Spotify Users icon)
-    if !compact {
-        let is_friends_open = app.details_open && app.right_tab == super::RightTab::Friends;
-        let tip = if is_friends_open { "Hide friend activity" } else { "Friend activity" };
-        let r = rbtn(ui, tool_x, "friends", tip);
-        let h = theme::anim_bool(&ctx, r.id.with("h"), r.hovered() || is_friends_open, 0.15);
-        let icon_fg = if is_friends_open { accent } else { ink(h) };
-        glyphs::draw(ui, r.rect.center(), 18.0, glyphs::USERS, icon_fg);
-        if is_friends_open {
-            ui.painter().circle_filled(pos2(r.rect.center().x, r.rect.bottom() + 1.0), 1.8, accent);
-        }
-        if r.clicked() {
-            app.actions.push(Action::ToggleFriends);
-        }
-        tool_x -= 30.0;
-    }
-
     // Details ("Now playing view" - Spotify style)
     if !compact {
         let is_details_open = app.details_open && app.right_tab == super::RightTab::Details;
