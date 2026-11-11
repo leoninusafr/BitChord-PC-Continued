@@ -60,8 +60,11 @@ fn details_content(app: &mut App, ui: &mut Ui) {
         return;
     };
 
-    // If lyrics aren't loaded or are for another song, trigger backend lyrics request immediately
-    if !app.lyrics.as_ref().is_some_and(|(lid, _)| lid == &t.id) && !app.loading {
+    // If lyrics aren't loaded or are for another song, trigger backend lyrics request once per track ID
+    let req_id = ui.scope_id().with(("lyrics-requested", &t.id));
+    let already_req = ui.ctx().data(|d| d.get_temp::<bool>(req_id)).unwrap_or(false);
+    if !already_req && !app.lyrics.as_ref().is_some_and(|(lid, _)| lid == &t.id) {
+        ui.ctx().data_mut(|d| d.insert_temp(req_id, true));
         app.backend.request(crate::backend::Req::Lyrics(t.clone()));
     }
 
@@ -259,27 +262,20 @@ fn details_content(app: &mut App, ui: &mut Ui) {
                 ui.add_space(6.0);
 
                 let (peek_rect, peek_resp) = ui.allocate_exact_size(vec2(width, 56.0), Sense::click());
+                let peek_resp = peek_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                 let ph = theme::anim_bool(ui.ctx(), peek_resp.id.with("ph"), peek_resp.hovered(), 0.15);
                 ui.painter().rect_filled(peek_rect, 8.0, theme::glass(0.08 + 0.08 * ph));
+                ui.painter().rect_stroke(peek_rect, 8.0, egui::Stroke::new(1.0, theme::glass(0.10)), egui::StrokeKind::Inside);
 
                 let thumb_rect = Rect::from_min_size(peek_rect.left_top() + vec2(8.0, 8.0), Vec2::splat(40.0));
                 paint_cover(ui, thumb_rect, &next_t.thumbs, 6.0, 1.0);
 
                 let info_left = thumb_rect.right() + 10.0;
-                ui.painter().text(
-                    pos2(info_left, peek_rect.top() + 12.0),
-                    Align2::LEFT_TOP,
-                    &next_t.title,
-                    theme::semibold(13.0),
-                    theme::text(),
-                );
-                ui.painter().text(
-                    pos2(info_left, peek_rect.top() + 29.0),
-                    Align2::LEFT_TOP,
-                    next_t.artist_line(),
-                    theme::regular(12.0),
-                    theme::text_dim(),
-                );
+                let text_max_w = (peek_rect.right() - info_left - 10.0).max(10.0);
+                let title_g = super::widgets::galley(ui, &next_t.title, theme::semibold(13.0), theme::text(), text_max_w);
+                ui.painter().galley(pos2(info_left, peek_rect.top() + 10.0), title_g, theme::text());
+                let artist_g = super::widgets::galley(ui, &next_t.artist_line(), theme::regular(12.0), theme::text_dim(), text_max_w);
+                ui.painter().galley(pos2(info_left, peek_rect.top() + 28.0), artist_g, theme::text_dim());
 
                 if peek_resp.clicked() {
                     let next_idx = if app.mix_hold().is_some() {
@@ -297,6 +293,7 @@ fn details_content(app: &mut App, ui: &mut Ui) {
             ui.add_space(6.0);
 
             let (lyric_rect, lyric_resp) = ui.allocate_exact_size(vec2(width, 140.0), Sense::click());
+            let lyric_resp = lyric_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
             let lh = theme::anim_bool(ui.ctx(), lyric_resp.id.with("lh"), lyric_resp.hovered(), 0.15);
             ui.painter().rect_filled(lyric_rect, 10.0, theme::panel(0.42 + 0.12 * lh));
             ui.painter().rect_stroke(lyric_rect, 10.0, egui::Stroke::new(1.0, theme::glass(0.12)), egui::StrokeKind::Inside);
@@ -349,16 +346,18 @@ fn details_content(app: &mut App, ui: &mut Ui) {
             }
 
             if !showed_synced {
-                let sample_lyrics = if app.loading {
-                    "Loading lyrics…".to_string()
+                let sample_lyrics = if app.lyrics.as_ref().is_some_and(|(lid, lset)| lid == &t.id && lset.sources.is_empty()) {
+                    "No lyrics found for this song"
+                } else if app.lyrics.as_ref().is_some_and(|(lid, _)| lid == &t.id) {
+                    "Click to view full lyrics & sing along…"
                 } else {
-                    "Click to view lyrics & sing along…".to_string()
+                    "Loading lyrics…"
                 };
                 ui.painter().text(
                     inner_l.left_top(),
                     Align2::LEFT_TOP,
-                    &sample_lyrics,
-                    theme::semibold(14.0),
+                    sample_lyrics,
+                    theme::regular(13.0),
                     theme::text_dim(),
                 );
             }
