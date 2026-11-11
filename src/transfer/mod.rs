@@ -311,7 +311,7 @@ impl Transfer {
         self.data_dir.join("webview-spotify")
     }
 
-    fn cookie(&self) -> Option<String> {
+    pub fn cookie(&self) -> Option<String> {
         crate::vault::get(VAULT, &self.data_dir).and_then(|b| String::from_utf8(b).ok())
     }
 
@@ -430,6 +430,77 @@ impl Transfer {
         }
     }
 
+    /// Full 2-Way Liked Songs Sync: merges Spotify Liked Songs and YouTube Music Liked Music
+    /// so both libraries contain the union of both collections without duplicates.
+    pub async fn sync_likes_two_way(
+        self: &Arc<Self>,
+        api: &crate::ytmapi::Api,
+    ) -> Result<(usize, usize)> {
+        let _cookie = self.cookie().ok_or_else(|| anyhow::anyhow!("Not signed in to Spotify"))?;
+        let client = self.spotify_client().await?;
+
+        // 1. Fetch Spotify Liked Songs
+        log::info!("2-way sync: fetching Spotify liked songs");
+        let sp_playlist = client.liked(|_, _| {}).await.context("Failed to read Spotify Liked Songs")?;
+        let sp_tracks = sp_playlist.tracks;
+
+        // 2. Fetch YouTube Music Liked Music
+        log::info!("2-way sync: fetching YouTube Music liked music");
+        let lm = crate::ytm::playlist(api, "LM", true, Some(20_000)).await.context("Failed to read YouTube Music Liked Music")?;
+        let ytm_tracks = lm.tracks;
+
+        log::info!("2-way sync: found {} songs on Spotify, {} songs on YouTube Music", sp_tracks.len(), ytm_tracks.len());
+
+        // 3. Find missing items on both sides (skip if already on both)
+        let mut missing_on_ytm: Vec<Track> = Vec::new();
+        for sp in &sp_tracks {
+            let already_on_ytm = ytm_tracks.iter().any(|yt| {
+                matches(yt, sp)
+                    || (yt.title.eq_ignore_ascii_case(&sp.name)
+                        && yt.artists.iter().any(|a| sp.artists.iter().any(|sa| sa.eq_ignore_ascii_case(&a.name))))
+            });
+            if !already_on_ytm {
+                missing_on_ytm.push(sp.clone());
+            }
+        }
+
+        let mut missing_on_spotify: Vec<YtTrack> = Vec::new();
+        for yt in &ytm_tracks {
+            let already_on_sp = sp_tracks.iter().any(|sp| {
+                matches(yt, sp)
+                    || (yt.title.eq_ignore_ascii_case(&sp.name)
+                        && yt.artists.iter().any(|a| sp.artists.iter().any(|sa| sa.eq_ignore_ascii_case(&a.name))))
+            });
+            if !already_on_sp {
+                missing_on_spotify.push(yt.clone());
+            }
+        }
+
+        log::info!("2-way sync: {} to add to YouTube Music, {} to add to Spotify", missing_on_ytm.len(), missing_on_spotify.len());
+
+        let mut added_to_ytm = 0;
+        // Oldest first so newest appears on top in YouTube Music
+        for sp in missing_on_ytm.iter().rev() {
+            if let Some(yt_track) = match_spotify_track(api, sp).await {
+                if let Ok(()) = crate::ytm::set_like(api, &yt_track.id, true).await {
+                    added_to_ytm += 1;
+                    tokio::time::sleep(Duration::from_millis(180)).await;
+                }
+            }
+        }
+
+        let mut added_to_spotify = 0;
+        for yt in &missing_on_spotify {
+            if let Ok(()) = client.sync_like(&yt.title, &yt.artist_line(), true).await {
+                added_to_spotify += 1;
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+        }
+
+        log::info!("2-way sync finished: {added_to_ytm} added to YTM, {added_to_spotify} added to Spotify");
+        Ok((added_to_ytm, added_to_spotify))
+    }
+
     /// Refresh Spotify library in the background.
     #[allow(dead_code)]
     pub fn refresh_spotify_library(self: &Arc<Self>, rt: &crate::backend::Backend) {
@@ -455,8 +526,11 @@ impl Transfer {
     }
 
     /// Fetch Spotify friend activity for the signed-in user.
-    pub async fn fetch_friend_activity(&self) -> Result<Vec<spotify::FriendActivity>, String> {
+    pub async fn fetch_friend_activity(&self, force_fresh: bool) -> Result<Vec<spotify::FriendActivity>, String> {
         let _cookie = self.cookie().ok_or_else(|| "Not signed in to Spotify".to_string())?;
+        if force_fresh {
+            *self.spotify_client.lock().unwrap() = None;
+        }
         let client = match self.spotify_client().await {
             Ok(c) => c,
             Err(e) => return Err(e.to_string()),

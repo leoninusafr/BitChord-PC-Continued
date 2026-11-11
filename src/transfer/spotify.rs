@@ -229,6 +229,7 @@ pub struct Client {
     access_token: String,
     client_token: String,
     client_version: String,
+    pub sp_dc: Option<String>,
     hashes: Hashes,
 }
 
@@ -271,7 +272,8 @@ impl Client {
         let (token, hashes) = tokio::try_join!(access_token(&http, sp_dc, &device_id), query_hashes(&http, &bundle, data_dir))?;
         let (access_token, client_id) = token;
         let client_token = client_token(&http, &client_version, &client_id, &device_id).await?;
-        Ok(Self { http, access_token, client_token, client_version, hashes })
+        let sp_dc = sp_dc.map(str::to_owned);
+        Ok(Self { http, access_token, client_token, client_version, sp_dc, hashes })
     }
 
     fn hash(&self, operation: &str) -> Result<&str> {
@@ -383,63 +385,82 @@ impl Client {
 
     /// Two-way like synchronization with Spotify: search track and like/unlike in Spotify library.
     pub async fn sync_like(&self, title: &str, artist: &str, like: bool) -> Result<()> {
-        let q = if artist.is_empty() {
-            title.to_owned()
-        } else {
-            format!("track:{} artist:{}", title, artist)
-        };
+        let clean_title = title.split(['(', '[']).next().unwrap_or(title).trim();
+        let queries = [
+            if artist.is_empty() { clean_title.to_owned() } else { format!("track:\"{}\" artist:\"{}\"", clean_title, artist) },
+            if artist.is_empty() { clean_title.to_owned() } else { format!("{} {}", clean_title, artist) },
+            format!("{} {}", title, artist),
+        ];
+
         let search_url = "https://api.spotify.com/v1/search";
-        let res: Value = self.http.get(search_url)
-            .bearer_auth(&self.access_token)
-            .query(&[("q", &q), ("type", &"track".to_string()), ("limit", &"1".to_string())])
-            .send().await?
-            .error_for_status()?.json().await?;
-        if let Some(id) = res["tracks"]["items"][0]["id"].as_str() {
+        let mut track_id = None;
+
+        for q in queries {
+            let req = self.http.get(search_url)
+                .bearer_auth(&self.access_token)
+                .query(&[("q", &q), ("type", &"track".to_string()), ("limit", &"1".to_string())]);
+            if let Ok(resp) = req.send().await.and_then(|r| r.error_for_status()) {
+                if let Ok(res) = resp.json::<Value>().await {
+                    if let Some(id) = res["tracks"]["items"][0]["id"].as_str() {
+                        track_id = Some(id.to_owned());
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(id) = track_id {
             let track_url = format!("https://api.spotify.com/v1/me/tracks?ids={}", id);
             let req = if like {
                 self.http.put(&track_url)
             } else {
                 self.http.delete(&track_url)
             };
-            let _ = req.bearer_auth(&self.access_token).send().await;
+            let _ = req.bearer_auth(&self.access_token).header("Content-Length", "0").send().await;
         }
         Ok(())
     }
 
     /// Spotify Friend Activity feed: reads who is listening to what.
     pub async fn buddylist(&self) -> Result<Vec<FriendActivity>> {
-        let url = "https://spclient.wg.spotify.com/presence-view/v1/buddylist";
-        let req = self
-            .http
-            .get(url)
-            .bearer_auth(&self.access_token)
-            .header("Client-Token", &self.client_token)
-            .header("Spotify-App-Version", &self.client_version)
-            .header("Cache-Control", "no-cache, no-store, must-revalidate")
-            .header("Pragma", "no-cache")
-            .header("Accept", "application/json");
-        let resp = match req.send().await.and_then(|r| r.error_for_status()) {
-            Ok(r) => r,
-            Err(_) => {
-                // Regional fallback
-                self.http
-                    .get("https://guc-spclient.spotify.com/presence-view/v1/buddylist")
-                    .bearer_auth(&self.access_token)
-                    .header("Client-Token", &self.client_token)
-                    .header("Spotify-App-Version", &self.client_version)
-                    .header("Cache-Control", "no-cache, no-store, must-revalidate")
-                    .header("Pragma", "no-cache")
-                    .header("Accept", "application/json")
-                    .send()
-                    .await?
-                    .error_for_status()
-                    .context("Spotify buddylist request failed")?
+        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+        let endpoints = [
+            format!("https://guc-spclient.spotify.com/presence-view/v1/buddylist?_t={now_ms}"),
+            format!("https://spclient.wg.spotify.com/presence-view/v1/buddylist?_t={now_ms}"),
+        ];
+
+        let mut last_err = None;
+        for url in endpoints {
+            let mut req = self
+                .http
+                .get(&url)
+                .bearer_auth(&self.access_token)
+                .header("Accept", "application/json")
+                .header("Cache-Control", "no-cache, no-store, must-revalidate")
+                .header("Pragma", "no-cache");
+
+            if let Some(cookie) = &self.sp_dc {
+                req = req.header("Cookie", format!("sp_dc={cookie}"));
             }
-        };
-        let body: BuddyListResponse = resp.json().await?;
-        let mut friends = body.friends;
-        friends.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        Ok(friends)
+
+            match req.send().await.and_then(|r| r.error_for_status()) {
+                Ok(resp) => {
+                    let text = resp.text().await?;
+                    log::debug!("spotify buddylist response from {url}: {text}");
+                    let body: BuddyListResponse = serde_json::from_str(&text)
+                        .with_context(|| format!("Failed to parse buddylist response: {text}"))?;
+                    let mut friends = body.friends;
+                    friends.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                    return Ok(friends);
+                }
+                Err(e) => {
+                    log::warn!("spotify buddylist error from {url}: {e:#}");
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        Err(last_err.map(Into::into).unwrap_or_else(|| anyhow!("Failed to fetch buddylist from Spotify")))
     }
 
     async fn page(&self, id: &str, offset: usize, limit: usize) -> Result<Value> {

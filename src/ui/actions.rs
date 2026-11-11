@@ -62,12 +62,12 @@ impl App {
                     self.details_open = true;
                     self.right_tab = RightTab::Friends;
                     self.queue_open = false;
-                    self.refresh_friend_activity();
+                    self.refresh_friend_activity(false);
                 } else if self.right_tab == RightTab::Friends {
                     self.details_open = false;
                 } else {
                     self.right_tab = RightTab::Friends;
-                    self.refresh_friend_activity();
+                    self.refresh_friend_activity(false);
                 }
             }
             Action::FriendActivityLoaded(res) => {
@@ -80,6 +80,44 @@ impl App {
                     }
                     Err(e) => {
                         self.friend_activity_error = Some(e);
+                    }
+                }
+            }
+            Action::StartTwoWayLikedSync => {
+                if self.two_way_syncing {
+                    self.toast("2-Way Sync is already running in background...");
+                    return;
+                }
+                if !self.logged_in {
+                    self.toast("Sign in to YouTube Music first");
+                    return;
+                }
+                if self.transfer.cookie().is_none() {
+                    self.toast("Sign in to Spotify in Library -> Spotify first");
+                    return;
+                }
+                self.two_way_syncing = true;
+                self.toast("Starting 2-Way Liked Songs Sync...");
+                let xfer = self.transfer.clone();
+                let api = self.backend.api();
+                let bg_actions = self.bg_actions.clone();
+                let b = self.backend.clone();
+                self.backend.spawn(async move {
+                    let res = xfer.sync_likes_two_way(&api).await.map_err(|e| e.to_string());
+                    bg_actions.lock().unwrap().push(Action::TwoWayLikedSyncFinished(res));
+                    b.wake();
+                });
+            }
+            Action::TwoWayLikedSyncFinished(res) => {
+                self.two_way_syncing = false;
+                match res {
+                    Ok((added_ytm, added_sp)) => {
+                        self.toast(format!("2-Way Sync complete: {added_ytm} added to YouTube Music, {added_sp} added to Spotify!"));
+                        self.request_liked(true);
+                        self.transfer.load_account(&self.backend);
+                    }
+                    Err(e) => {
+                        self.toast(format!("2-Way Sync failed: {e}"));
                     }
                 }
             }

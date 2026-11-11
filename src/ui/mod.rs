@@ -171,6 +171,10 @@ pub enum Action {
     UnblockTrack(String),
     /// Unblock a previously blocked artist.
     UnblockArtist(String),
+    /// Trigger 2-Way Liked Songs Sync between Spotify and YouTube Music
+    StartTwoWayLikedSync,
+    /// Result of 2-way sync
+    TwoWayLikedSyncFinished(Result<(usize, usize), String>),
 }
 
 enum Dialog {
@@ -505,6 +509,7 @@ pub struct App {
     pub sidebar_width: f32,
     pub followed_artists: HashSet<String>,
     pub spotify_two_way_sync: bool,
+    pub two_way_syncing: bool,
     pub friend_activity: Vec<crate::transfer::spotify::FriendActivity>,
     pub friend_activity_loading: bool,
     pub friend_activity_error: Option<String>,
@@ -823,6 +828,7 @@ impl App {
             sidebar_width: 250.0,
             followed_artists: Default::default(),
             spotify_two_way_sync: false,
+            two_way_syncing: false,
             friend_activity: Vec::new(),
             friend_activity_loading: false,
             friend_activity_error: None,
@@ -923,7 +929,7 @@ impl App {
         app
     }
 
-    pub fn refresh_friend_activity(&mut self) {
+    pub fn refresh_friend_activity(&mut self, force_fresh: bool) {
         if self.friend_activity_loading {
             return;
         }
@@ -940,7 +946,7 @@ impl App {
         let bg_actions = self.bg_actions.clone();
 
         self.backend.spawn(async move {
-            let res = xfer.fetch_friend_activity().await;
+            let res = xfer.fetch_friend_activity(force_fresh).await;
             bg_actions.lock().unwrap().push(Action::FriendActivityLoaded(res));
             b.wake();
         });
@@ -1456,7 +1462,7 @@ impl eframe::App for App {
             let stale = self.friend_activity_last_fetch.is_none()
                 || self.friend_activity_last_fetch.unwrap().elapsed() > std::time::Duration::from_secs(30);
             if stale {
-                self.refresh_friend_activity();
+                self.refresh_friend_activity(false);
             }
             if !self.friend_activity.is_empty() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(100));

@@ -1420,12 +1420,19 @@ pub fn settings_section(app: &mut App, ui: &mut Ui) {
         super::pages::divider(ui);
         super::pages::setting_row(
             ui,
-            "2-Way Spotify Sync",
-            Some("Keep BitChord playlists synchronized with your Spotify library. Disabled by default to prevent accidental duplicates."),
+            "2-Way Liked Songs Sync",
+            Some("Bidirectionally merges Spotify Liked Songs and YouTube Music Liked Music so both accounts have all songs without duplicates."),
             |ui| {
                 super::pages::toggle(ui, &mut app.spotify_two_way_sync, "2-Way Spotify Sync");
             },
         );
+        if app.spotify_two_way_sync {
+            ui.add_space(6.0);
+            let sync_label = if app.two_way_syncing { "Syncing in background…" } else { "Run 2-Way Liked Songs Sync Now" };
+            if pill(ui, sync_label, Some(icon::ROTATE_CW), false).clicked() && !app.two_way_syncing {
+                app.actions.push(Action::StartTwoWayLikedSync);
+            }
+        }
 
         if let Some(lib) = app.library.as_ref() {
             let playlists: Vec<(String, String)> = lib.playlists.iter().filter_map(|c| {

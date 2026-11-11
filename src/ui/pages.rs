@@ -1289,6 +1289,12 @@ fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
                         super::shuffle(&mut t);
                         app.actions.push(Action::Play(t, 0));
                     }
+                    if app.transfer.cookie().is_some() {
+                        let label = if app.two_way_syncing { "Syncing with Spotify…" } else { "2-Way Sync with Spotify" };
+                        if pill(ui, label, Some(icon::ROTATE_CW), false).clicked() && !app.two_way_syncing {
+                            app.actions.push(Action::StartTwoWayLikedSync);
+                        }
+                    }
                     select_pill(ui, &mut app.selection, &app.page);
                 });
                 ui.add_space(10.0);
@@ -1297,6 +1303,13 @@ fn library(app: &mut App, ui: &mut Ui, tab: LibTab, now: f64) {
                 ui.label(RichText::new("No liked songs yet").font(theme::semibold(16.0)).color(theme::text_dim()));
                 ui.add_space(4.0);
                 ui.label(RichText::new("Songs you like will appear here.").font(theme::regular(13.5)).color(theme::text_faint()));
+                if app.transfer.cookie().is_some() {
+                    ui.add_space(12.0);
+                    let label = if app.two_way_syncing { "Syncing with Spotify…" } else { "Import Liked Songs from Spotify (2-Way)" };
+                    if pill(ui, label, Some(icon::ROTATE_CW), true).clicked() && !app.two_way_syncing {
+                        app.actions.push(Action::StartTwoWayLikedSync);
+                    }
+                }
             }
             list(ui, &rows, &app.liked, liked, true, plain, ListCtx { sel: &mut app.selection, page: &app.page, own: false }, &mut app.actions);
             if more {
@@ -1613,7 +1626,7 @@ fn spotify_sync_tab(app: &mut App, ui: &mut Ui, _now: f64) {
                 let count_text = liked_entry.count.map_or("Your liked songs".to_string(), |c| format!("{c} synced songs"));
                 ui.painter().text(pos2(tx, hi.center().y + 9.0), egui::Align2::LEFT_CENTER, &count_text, theme::regular(13.0), Color32::from_rgb(200, 225, 205));
 
-                let btns_r = Rect::from_min_max(pos2(hi.right() - 250.0, hi.top()), hi.max);
+                let btns_r = Rect::from_min_max(pos2(hi.right() - 320.0, hi.top()), hi.max);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(btns_r), |ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if pill(ui, "Open", Some(icon::CHEVRON_RIGHT), false).clicked() || h_resp.clicked() {
@@ -1624,6 +1637,11 @@ fn spotify_sync_tab(app: &mut App, ui: &mut Ui, _now: f64) {
                             xfer.fetch_spotify_playlist(&b, Source::Liked, move |res| {
                                 *slot.lock().unwrap() = Some((Source::Liked, res));
                             });
+                        }
+                        ui.add_space(8.0);
+                        let sync_label = if app.two_way_syncing { "Syncing…" } else { "2-Way Sync" };
+                        if pill(ui, sync_label, Some(icon::ROTATE_CW), false).clicked() && !app.two_way_syncing {
+                            app.actions.push(Action::StartTwoWayLikedSync);
                         }
                     });
                 });

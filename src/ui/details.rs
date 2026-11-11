@@ -473,7 +473,7 @@ fn friends_content(app: &mut App, ui: &mut Ui) {
         } else {
             super::widgets::icon_at(ui, r.center(), crate::theme::icon::ROTATE_CW, 13.0, theme::lerp_color(theme::text_faint(), theme::text(), rh));
             if resp.clicked() {
-                app.refresh_friend_activity();
+                app.refresh_friend_activity(true);
             }
         }
     });
@@ -497,7 +497,7 @@ fn friends_content(app: &mut App, ui: &mut Ui) {
                 ui.label(egui::RichText::new(&err).font(theme::regular(12.0)).color(theme::text_faint()));
                 ui.add_space(14.0);
                 if super::widgets::pill(ui, "Retry", Some(crate::theme::icon::ROTATE_CW), false).clicked() {
-                    app.refresh_friend_activity();
+                    app.refresh_friend_activity(true);
                 }
             });
         } else {
@@ -513,7 +513,7 @@ fn friends_content(app: &mut App, ui: &mut Ui) {
                     .color(theme::text_faint()));
                 ui.add_space(14.0);
                 if super::widgets::pill(ui, "Refresh", Some(crate::theme::icon::ROTATE_CW), false).clicked() {
-                    app.refresh_friend_activity();
+                    app.refresh_friend_activity(true);
                 }
             });
         }
