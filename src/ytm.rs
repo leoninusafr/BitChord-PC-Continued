@@ -78,6 +78,11 @@ pub async fn search_songs(api: &Api, query: &str, auth: bool) -> anyhow::Result<
     Ok(search_as(api, query, Filter::Songs, auth).await?.iter().filter_map(|i| list_item(&i["musicResponsiveListItemRenderer"])).collect())
 }
 
+/// Video rows, searched either signed out or as the signed-in account.
+pub async fn search_videos(api: &Api, query: &str, auth: bool) -> anyhow::Result<Vec<Track>> {
+    Ok(search_as(api, query, Filter::Videos, auth).await?.iter().filter_map(|i| list_item(&i["musicResponsiveListItemRenderer"])).collect())
+}
+
 /// Song or video rows, searched as the signed-in account: signed-out searches miss
 /// some major-label releases entirely (the Spotify transfer needs those).
 pub async fn search_tracks_signed_in(api: &Api, query: &str, filter: Filter) -> anyhow::Result<Vec<Track>> {

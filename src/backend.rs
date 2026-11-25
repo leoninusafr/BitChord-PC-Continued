@@ -693,7 +693,7 @@ impl Backend {
                 Req::Album { id, load } => Resp::Collection { load, c: ytm::album(api, &id).await?, more: false },
                 Req::Playlist { id, load, stream: false } => Resp::Collection { load, c: ytm::playlist(api, &id, me, None).await?, more: false },
                 Req::Playlist { id, load, stream: true } => self.stream_playlist(id, load, me).await?,
-                Req::Artist(id) => Resp::Artist(ytm::artist(api, &id).await?),
+                Req::Artist(id) => self.artist(&id).await?,
                 Req::Library => self.library().await?,
                 Req::History => Resp::History(ytm::history(api).await?),
                 Req::Uploads => Resp::Uploads(ytm::uploads(api).await?),
@@ -876,19 +876,50 @@ impl Backend {
     /// must arrive.
     async fn search(&self, query: String, me: bool) -> anyhow::Result<Resp> {
         let api = &*self.api;
-        let (t, al, ar, pl) = tokio::join!(
+        let (t, v, al, ar, pl) = tokio::join!(
             ytm::search_songs(api, &query, me),
+            ytm::search_videos(api, &query, me),
             ytm::search_cards(api, &query, ytm::Filter::Albums, me),
             ytm::search_cards(api, &query, ytm::Filter::Artists, me),
             ytm::search_cards(api, &query, ytm::Filter::Playlists, me),
         );
+        let mut tracks = t.unwrap_or_default();
+        if let Ok(videos) = v {
+            for v_track in videos {
+                if !tracks.iter().any(|existing| existing.id == v_track.id) {
+                    tracks.push(v_track);
+                }
+            }
+        }
         Ok(Resp::Search(SearchResults {
-            tracks: t?,
+            tracks,
             albums: al.unwrap_or_default(),
             artists: ar.unwrap_or_default(),
             playlists: pl.unwrap_or_default(),
             query,
         }))
+    }
+
+    /// Load artist page and enrich top songs with soundtrack/compilation tracks (e.g. Heartbeat on Manhunter OST).
+    async fn artist(&self, id: &str) -> anyhow::Result<Resp> {
+        let api = &*self.api;
+        let mut page = ytm::artist(api, id).await?;
+        if let Ok(searched) = ytm::search_songs(api, &page.name, false).await {
+            let mut extra_top = Vec::new();
+            for tr in searched {
+                let is_this_artist = tr.artists.iter().any(|a| {
+                    a.id.as_deref() == Some(&page.id) || a.name.eq_ignore_ascii_case(&page.name)
+                });
+                if is_this_artist && !page.top.iter().any(|existing| existing.id == tr.id) {
+                    extra_top.push(tr);
+                }
+            }
+            if !extra_top.is_empty() {
+                extra_top.extend(page.top);
+                page.top = extra_top;
+            }
+        }
+        Ok(Resp::Artist(page))
     }
 
     /// Saved playlists and albums.

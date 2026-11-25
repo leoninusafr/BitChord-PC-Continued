@@ -104,6 +104,11 @@ impl Source {
             Self::Liked => "liked",
         }
     }
+
+    /// The playlist id or key.
+    pub fn id(&self) -> &str {
+        self.key()
+    }
 }
 
 /// A playlist in the user's library, as the source list shows it.
@@ -245,8 +250,8 @@ impl Client {
     pub async fn connect(sp_dc: Option<&str>, data_dir: &Path) -> Result<Self> {
         let http = crate::proxy::apply(reqwest::Client::builder())
             .user_agent(UA)
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .timeout(std::time::Duration::from_secs(20))
+            .connect_timeout(std::time::Duration::from_secs(12))
+            .timeout(std::time::Duration::from_secs(30))
             .build()?;
 
         let resp = http.get("https://open.spotify.com").send().await?.error_for_status()?;
@@ -269,7 +274,7 @@ impl Client {
             .to_owned();
 
         // The access token, client token and query hashes don't depend on each other.
-        let (token, hashes) = tokio::try_join!(access_token(&http, sp_dc, &device_id), query_hashes(&http, &bundle, data_dir))?;
+        let (token, hashes) = tokio::try_join!(access_token(&http, sp_dc, &device_id, &bundle), query_hashes(&http, &bundle, data_dir))?;
         let (access_token, client_id) = token;
         let client_token = client_token(&http, &client_version, &client_id, &device_id).await?;
         let sp_dc = sp_dc.map(str::to_owned);
@@ -419,6 +424,86 @@ impl Client {
             let _ = req.bearer_auth(&self.access_token).header("Content-Length", "0").send().await;
         }
         Ok(())
+    }
+
+    /// Search Spotify tracks by query string.
+    pub async fn search_tracks(&self, query: &str, limit: usize) -> Result<Vec<Track>> {
+        let search_url = "https://api.spotify.com/v1/search";
+        let limit_str = limit.to_string();
+        let resp = self.http.get(search_url)
+            .bearer_auth(&self.access_token)
+            .query(&[("q", query), ("type", "track"), ("limit", &limit_str)])
+            .send()
+            .await?
+            .error_for_status()?;
+        let res: Value = resp.json().await?;
+        let mut tracks = Vec::new();
+        if let Some(items) = res["tracks"]["items"].as_array() {
+            for item in items {
+                let name = item["name"].as_str().unwrap_or_default().to_string();
+                let artists: Vec<String> = item["artists"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|a| a["name"].as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let art = item["album"]["images"]
+                    .as_array()
+                    .and_then(|imgs| imgs.first())
+                    .and_then(|img| img["url"].as_str())
+                    .map(String::from);
+                let duration = item["duration_ms"].as_u64().map(|ms| ((ms + 500) / 1000) as u32);
+                if !name.is_empty() && !artists.is_empty() {
+                    tracks.push(Track {
+                        name,
+                        artists,
+                        local: false,
+                        art,
+                        duration,
+                    });
+                }
+            }
+        }
+        Ok(tracks)
+    }
+
+    /// Search Spotify playlists by query string.
+    pub async fn search_playlists(&self, query: &str, limit: usize) -> Result<Vec<Entry>> {
+        let search_url = "https://api.spotify.com/v1/search";
+        let limit_str = limit.to_string();
+        let resp = self.http.get(search_url)
+            .bearer_auth(&self.access_token)
+            .query(&[("q", query), ("type", "playlist"), ("limit", &limit_str)])
+            .send()
+            .await?
+            .error_for_status()?;
+        let res: Value = resp.json().await?;
+        let mut pls = Vec::new();
+        if let Some(items) = res["playlists"]["items"].as_array() {
+            for item in items {
+                let id = item["id"].as_str().unwrap_or_default().to_string();
+                let name = item["name"].as_str().unwrap_or_default().to_string();
+                let owner = item["owner"]["display_name"].as_str().unwrap_or_default().to_string();
+                let count = item["tracks"]["total"].as_u64().map(|c| c as usize);
+                let art = item["images"]
+                    .as_array()
+                    .and_then(|imgs| imgs.first())
+                    .and_then(|img| img["url"].as_str())
+                    .map(String::from);
+                if !id.is_empty() && !name.is_empty() {
+                    pls.push(Entry {
+                        source: Source::Playlist(id),
+                        name,
+                        owner,
+                        count,
+                        art,
+                    });
+                }
+            }
+        }
+        Ok(pls)
     }
 
     /// Spotify Friend Activity feed: reads who is listening to what.
@@ -634,8 +719,8 @@ fn split_artists(s: &str) -> Vec<String> {
     s.split([',', ';']).map(str::trim).filter(|a| !a.is_empty()).map(str::to_owned).collect()
 }
 
-async fn access_token(http: &reqwest::Client, sp_dc: Option<&str>, device_id: &str) -> Result<(String, String)> {
-    let (version, secret) = totp_secret(http).await;
+async fn access_token(http: &reqwest::Client, sp_dc: Option<&str>, device_id: &str, bundle: &str) -> Result<(String, String)> {
+    let (version, secret) = totp_secret(http, bundle).await;
     let totp = totp(&secret, SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
     let version = version.to_string();
     let mut cookie = format!("sp_t={device_id}");
@@ -672,11 +757,22 @@ impl std::fmt::Display for SignedOut {
 
 impl std::error::Error for SignedOut {}
 
-/// The newest web-player TOTP secret, falling back to a known one.
-async fn totp_secret(http: &reqwest::Client) -> (u32, Vec<u8>) {
+/// The newest web-player TOTP secret: extracted directly from Spotify's web-player bundle (SpotAPI technique),
+/// falling back to the ThetaDev secrets repository, then to a built-in known secret.
+async fn totp_secret(http: &reqwest::Client, bundle: &str) -> (u32, Vec<u8>) {
+    // 1. Try extracting directly from the Spotify web-player bundle
+    if let Ok(resp) = http.get(bundle).send().await {
+        if let Ok(js) = resp.text().await {
+            if let Some((v, s)) = extract_bundle_secret(&js) {
+                return (v, s);
+            }
+        }
+    }
+
+    // 2. Fallback to ThetaDev secrets repository
     let fetched = async {
         let secrets: serde_json::Map<String, Value> =
-            http.get(SECRETS_URL).timeout(std::time::Duration::from_secs(5)).send().await?.error_for_status()?.json().await?;
+            http.get(SECRETS_URL).timeout(std::time::Duration::from_secs(6)).send().await?.error_for_status()?.json().await?;
         let (version, list) = secrets
             .iter()
             .filter_map(|(k, v)| Some((k.parse::<u32>().ok()?, v.as_array()?)))
@@ -686,6 +782,30 @@ async fn totp_secret(http: &reqwest::Client) -> (u32, Vec<u8>) {
         Ok::<_, anyhow::Error>((version, bytes))
     };
     fetched.await.unwrap_or_else(|_: anyhow::Error| (FALLBACK_SECRET.0, FALLBACK_SECRET.1.to_vec()))
+}
+
+fn extract_bundle_secret(js: &str) -> Option<(u32, Vec<u8>)> {
+    let mut best: Option<(u32, Vec<u8>)> = None;
+    for part in js.split("secret:") {
+        let part = part.trim_start();
+        let Some(quote) = part.chars().next() else { continue };
+        if quote != '\'' && quote != '"' {
+            continue;
+        }
+        let after_quote = &part[1..];
+        let Some(end_quote) = after_quote.find(quote) else { continue };
+        let secret_str = &after_quote[..end_quote];
+        let rest = &after_quote[end_quote + 1..];
+        if let Some(v_idx) = rest.find("version:") {
+            let num_str: String = rest[v_idx + 8..].chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(ver) = num_str.parse::<u32>() {
+                if best.as_ref().is_none_or(|(b_ver, _)| ver > *b_ver) {
+                    best = Some((ver, secret_str.as_bytes().to_vec()));
+                }
+            }
+        }
+    }
+    best
 }
 
 /// RFC 6238 TOTP (SHA-1, 30 s, 6 digits) over Spotify's obfuscated secret.

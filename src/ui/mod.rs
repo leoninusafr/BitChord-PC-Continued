@@ -20,6 +20,7 @@ mod mini;
 mod notes;
 mod nowplaying;
 mod pages;
+pub mod playlist_sync;
 mod playback;
 mod queue;
 mod responses;
@@ -160,6 +161,16 @@ pub enum Action {
     PlaySpotify(crate::transfer::spotify::Track),
     /// Play a Spotify playlist starting at an index, matching tracks on the fly.
     PlaySpotifyPlaylist(Vec<crate::transfer::spotify::Track>, usize),
+    /// Search YouTube Music for query and immediately start playing top match.
+    PlayQuery(String),
+    /// Spotify search results loaded in background.
+    SpotifySearchResults {
+        query: String,
+        tracks: Vec<crate::transfer::spotify::Track>,
+        playlists: Vec<crate::transfer::spotify::Entry>,
+    },
+    /// Open a Spotify playlist by entry.
+    OpenSpotifyPlaylist(crate::transfer::spotify::Entry),
     /// Display a floating toast banner with message.
     Toast(String),
     /// Block a song permanently (dislikes on YouTube and skips in playback).
@@ -592,6 +603,7 @@ pub struct App {
     playlist_order: Vec<String>,
     hidden_playlists: HashSet<String>,
     pub spotify_excluded_playlists: HashSet<String>,
+    pub playlist_decisions: std::collections::HashMap<String, String>,
     /// The collection page whose inline search is open, and what's typed in it.
     coll_search: Option<(String, String)>,
     actions: Vec<Action>,
@@ -601,6 +613,8 @@ pub struct App {
     pub bg_actions: Arc<std::sync::Mutex<Vec<Action>>>,
     pub blocked_tracks: std::collections::HashMap<String, crate::model::BlockedTrack>,
     pub blocked_artists: std::collections::HashMap<String, crate::model::BlockedArtist>,
+    pub spotify_search: Option<(String, Vec<crate::transfer::spotify::Track>, Vec<crate::transfer::spotify::Entry>)>,
+    pub spotify_search_loading: bool,
     dialog: Option<Dialog>,
     share_pending: Option<String>,
     smoke: Option<String>,
@@ -750,6 +764,7 @@ impl App {
             playlist_order: get("playlist_order").map(|v| v.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect()).unwrap_or_default(),
             hidden_playlists: get("hidden_playlists").map(|v| v.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect()).unwrap_or_default(),
             spotify_excluded_playlists: get("spotify_excluded_playlists").map(|v| v.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect()).unwrap_or_default(),
+            playlist_decisions: get("playlist_decisions").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
             coll_search: None,
             update_checked: None,
             update_announced: false,
@@ -860,6 +875,8 @@ impl App {
             bg_actions: Arc::new(Mutex::new(Vec::new())),
             blocked_tracks: get("blocked_tracks").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
             blocked_artists: get("blocked_artists").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
+            spotify_search: None,
+            spotify_search_loading: false,
             dialog: None,
             share_pending: None,
             smoke: None,
@@ -1022,7 +1039,10 @@ impl App {
             }
             Page::New => Some(Req::Explore(self.preferred_artist_ids())),
             // The empty search is the page's landing state: nothing to ask for.
-            Page::Search(q) if !q.trim().is_empty() && self.search.as_ref().is_none_or(|s| &s.query != q) => Some(Req::Search(q.clone())),
+            Page::Search(q) if !q.trim().is_empty() && self.search.as_ref().is_none_or(|s| &s.query != q) => {
+                self.trigger_spotify_search(q);
+                Some(Req::Search(q.clone()))
+            }
             Page::Album(id) | Page::Playlist(id) => {
                 self.visit_list(id, matches!(self.page, Page::Album(_)));
                 None
@@ -1219,6 +1239,32 @@ impl App {
 
     fn toast(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), -1.0));
+    }
+
+    /// Trigger asynchronous search on Spotify catalogue if Spotify is connected.
+    pub fn trigger_spotify_search(&mut self, query: &str) {
+        let q = query.trim().to_owned();
+        if q.is_empty() || !self.transfer.is_connected() {
+            return;
+        }
+        self.spotify_search_loading = true;
+        let xfer = self.transfer.clone();
+        let bg_actions = self.bg_actions.clone();
+        let b = self.backend.clone();
+        self.backend.spawn(async move {
+            if let Ok((tracks, playlists)) = xfer.search_spotify(&q).await {
+                bg_actions.lock().unwrap().push(Action::SpotifySearchResults { query: q, tracks, playlists });
+                b.wake();
+            }
+        });
+    }
+
+    pub fn set_playlist_decision(&mut self, key: &str, decision: &str) {
+        self.playlist_decisions.insert(key.to_string(), decision.to_string());
+    }
+
+    pub fn clear_playlist_decisions(&mut self) {
+        self.playlist_decisions.clear();
     }
 
     /// The name and target of the currently playing context (Playlist, Album, or Liked Music),
@@ -1858,6 +1904,7 @@ impl eframe::App for App {
         storage.set_string("playlist_order", self.playlist_order.join("\n"));
         storage.set_string("hidden_playlists", self.hidden_playlists.iter().cloned().collect::<Vec<_>>().join("\n"));
         storage.set_string("spotify_excluded_playlists", self.spotify_excluded_playlists.iter().cloned().collect::<Vec<_>>().join("\n"));
+        storage.set_string("playlist_decisions", serde_json::to_string(&self.playlist_decisions).unwrap_or_default());
         // Pretend versions (dev hook) mustn't decide the real "what's new".
         if std::env::var_os("YTM_UPDATE_AS").is_none() {
             storage.set_string("last_version", crate::update::current_version());

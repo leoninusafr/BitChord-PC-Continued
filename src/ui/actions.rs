@@ -28,6 +28,21 @@ impl App {
                 self.toggle()
             }
             Action::Play(tracks, i) => {
+                if let Some(t) = tracks.get(i) {
+                    if t.id.starts_with("sp:") || t.id.starts_with("spotify:") {
+                        let sp_tracks: Vec<crate::transfer::spotify::Track> = tracks.iter().map(|tr| {
+                            crate::transfer::spotify::Track {
+                                name: tr.title.clone(),
+                                artists: tr.artists.iter().map(|a| a.name.clone()).collect(),
+                                local: false,
+                                art: tr.thumbs.first().map(|th| th.url.clone()),
+                                duration: tr.duration,
+                            }
+                        }).collect();
+                        self.apply(Action::PlaySpotifyPlaylist(sp_tracks, i));
+                        return;
+                    }
+                }
                 // Play buttons and rows live on the page they play from.
                 self.queue_source = match &self.page {
                     Page::Album(id) => Some(Target::Album(id.clone())),
@@ -129,7 +144,7 @@ impl App {
                 if let Some(hit) = cached {
                     self.play_list(vec![hit], 0);
                 } else {
-                    self.toast(format!("Spottube: Searching \"{}\"...", t.name));
+                    self.toast(format!("Spotify: Searching \"{}\"...", t.name));
                     let api = self.backend.api();
                     let cache = self.spotify_cache.clone();
                     let bg_actions = self.bg_actions.clone();
@@ -139,9 +154,27 @@ impl App {
                             cache.lock().unwrap().insert(cache_key, hit.clone());
                             bg_actions.lock().unwrap().push(Action::Play(vec![hit], 0));
                             b.wake();
+                        } else {
+                            bg_actions.lock().unwrap().push(Action::Toast(format!("Spotify: \"{}\" not found on YouTube", t.name)));
+                            b.wake();
                         }
                     });
                 }
+            }
+            Action::SpotifySearchResults { query, tracks, playlists } => {
+                self.spotify_search = Some((query, tracks, playlists));
+                self.spotify_search_loading = false;
+            }
+            Action::OpenSpotifyPlaylist(entry) => {
+                self.page = Page::Library(super::LibTab::Playlists);
+                self.spotify_selected = Some((entry.clone(), None, true));
+                let xfer = self.transfer.clone();
+                let b = self.backend.clone();
+                let slot = self.spotify_loaded_playlist.clone();
+                let src = entry.source.clone();
+                xfer.fetch_spotify_playlist(&b, src.clone(), move |res| {
+                    *slot.lock().unwrap() = Some((src, res));
+                });
             }
             Action::PlaySpotifyPlaylist(tracks, start_index) => {
                 if tracks.is_empty() || start_index >= tracks.len() {
@@ -159,7 +192,7 @@ impl App {
                 if let Some(hit) = &cached {
                     self.play_list(vec![hit.clone()], 0);
                 } else {
-                    self.toast(format!("Spottube: Playing \"{}\"...", first_t.name));
+                    self.toast(format!("Spotify: Playing \"{}\"...", first_t.name));
                 }
 
                 self.backend.spawn(async move {
@@ -204,6 +237,29 @@ impl App {
                     }
                 });
             }
+            Action::PlayQuery(query) => {
+                let q = query.trim().to_owned();
+                if q.is_empty() {
+                    return;
+                }
+                self.toast(format!("Searching and playing \"{q}\"…"));
+                let api = self.backend.api();
+                let bg_actions = self.bg_actions.clone();
+                let b = self.backend.clone();
+                self.backend.spawn(async move {
+                    let mut songs = crate::ytm::search_songs(&api, &q, false).await.unwrap_or_default();
+                    if songs.is_empty() {
+                        songs = crate::ytm::search_videos(&api, &q, false).await.unwrap_or_default();
+                    }
+                    if !songs.is_empty() {
+                        bg_actions.lock().unwrap().push(Action::Play(songs, 0));
+                        b.wake();
+                    } else {
+                        bg_actions.lock().unwrap().push(Action::Toast(format!("No results for \"{q}\"")));
+                        b.wake();
+                    }
+                });
+            }
             Action::TransferPick(t) => transfer::use_pick(self, t),
             // Kept already: at once. A playlist that isn't starts with its first page.
             Action::PlayCollection(Target::Album(id) | Target::Playlist(id), shuffle) if self.opened(&id).is_some() => self.play_opened(id, shuffle),
@@ -211,7 +267,29 @@ impl App {
                 self.toast("Starting playback…");
                 self.play_pending = Some((target.clone(), shuffle));
                 match target {
-                    Target::Playlist(id) => self.load_list(&id, false, false),
+                    Target::Playlist(id) => {
+                        if let Some(sp_id) = id.strip_prefix("sp:") {
+                            let entry = crate::transfer::spotify::Entry {
+                                name: "Spotify Playlist".to_string(),
+                                owner: "Spotify".to_string(),
+                                count: None,
+                                art: None,
+                                source: crate::transfer::spotify::Source::Playlist(sp_id.to_string()),
+                            };
+                            let xfer = self.transfer.clone();
+                            let b = self.backend.clone();
+                            let b_wake = self.backend.clone();
+                            let bg_actions = self.bg_actions.clone();
+                            xfer.fetch_spotify_playlist(&b, entry.source.clone(), move |res| {
+                                if let Ok(p) = res {
+                                    bg_actions.lock().unwrap().push(Action::PlaySpotifyPlaylist(p.tracks, 0));
+                                    b_wake.wake();
+                                }
+                            });
+                        } else {
+                            self.load_list(&id, false, false);
+                        }
+                    }
                     target => self.backend.request(Req::PlayCollection { target }),
                 }
             }
@@ -224,7 +302,27 @@ impl App {
                 }
             }
             Action::Open(Target::Album(id)) => self.go(Page::Album(id)),
-            Action::Open(Target::Playlist(id)) => self.go(Page::Playlist(id)),
+            Action::Open(Target::Playlist(id)) => {
+                if let Some(sp_id) = id.strip_prefix("sp:") {
+                    let entry = {
+                        let acc = self.transfer.account.lock().unwrap();
+                        if let crate::transfer::Account::SignedIn { library, .. } = &*acc {
+                            library.iter().find(|e| e.source.id() == sp_id).cloned()
+                        } else {
+                            None
+                        }
+                    }.unwrap_or_else(|| crate::transfer::spotify::Entry {
+                        name: "Spotify Playlist".to_string(),
+                        owner: "Spotify".to_string(),
+                        count: None,
+                        art: None,
+                        source: crate::transfer::spotify::Source::Playlist(sp_id.to_string()),
+                    });
+                    self.apply(Action::OpenSpotifyPlaylist(entry));
+                } else {
+                    self.go(Page::Playlist(id));
+                }
+            }
             Action::Open(Target::Artist(id)) => self.go(Page::Artist(id)),
             Action::PlayNext(t) => {
                 let start = self.queue.play_next(t);

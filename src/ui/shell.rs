@@ -785,13 +785,20 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
             app.suggest_sel = None;
             let now = ui.input(|i| i.time);
             let first = app.suggestions.1.is_empty();
-            let query = app.search_text.trim();
+            let query = app.search_text.trim().to_owned();
             app.suggestions = app.suggest_cache.iter()
-                .find(|(q, _)| q == query)
+                .find(|(q, _)| q == &query)
                 .cloned()
                 .unwrap_or_default();
             let delay = if first || cleared || edit.gained_focus() { 0.0 } else { 0.06 };
             app.suggest_due = Some(now + delay);
+
+            if !query.is_empty() && query != app.search_synced {
+                app.page = Page::Search(query.clone());
+                app.search_synced = query.clone();
+                app.backend.request(crate::backend::Req::Search(query.clone()));
+                app.trigger_spotify_search(&query);
+            }
         }
 
         if (edit.has_focus() || app.search_focused) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -941,13 +948,19 @@ pub fn search_field(app: &mut App, ui: &mut Ui, width: f32) {
         let now = ui.input(|i| i.time);
         // Show cached results immediately, then refresh after a short typing pause.
         let first = app.suggestions.1.is_empty();
-        let query = app.search_text.trim();
+        let query = app.search_text.trim().to_owned();
         app.suggestions = app.suggest_cache.iter()
-            .find(|(q, _)| q == query)
+            .find(|(q, _)| q == &query)
             .cloned()
             .unwrap_or_default();
         let delay = if first || cleared || edit.gained_focus() { 0.0 } else { 0.06 };
         app.suggest_due = Some(now + delay);
+
+        if !query.is_empty() && query != app.search_synced {
+            app.search_synced = query.clone();
+            app.backend.request(crate::backend::Req::Search(query.clone()));
+            app.trigger_spotify_search(&query);
+        }
     }
     // The event loop can otherwise sleep past the debounce deadline.
     if let Some(due) = app.suggest_due {
@@ -1021,8 +1034,28 @@ pub fn suggestions(app: &mut App, ctx: &egui::Context) {
                         ui.painter().rect_filled(r, 8.0, theme::glass(0.08 * h));
                         let glyph = if s.forget.is_some() { icon::HISTORY } else { icon::SEARCH };
                         icon_at(ui, pos2(r.left() + 20.0, r.center().y), glyph, 15.0, theme::text_dim());
-                        let room = if s.forget.is_some() { 88.0 } else { 52.0 };
+                        let room = if s.forget.is_some() { 88.0 } else { 56.0 };
                         suggestion_text(ui, pos2(r.left() + 42.0, r.center().y - 9.0), &term, &app.suggestions.0, r.width() - room);
+
+                        // Instant Play button on hover (Spotify-style 1-click playback)
+                        let play_center = pos2(r.right() - if s.forget.is_some() { 50.0 } else { 22.0 }, r.center().y);
+                        let play_rect = Rect::from_center_size(play_center, Vec2::splat(26.0));
+                        let play_resp = named(ui.interact(play_rect, resp.id.with("quick-play"), Sense::click()), "Play immediately")
+                            .on_hover_text("Play immediately")
+                            .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        let ph = theme::anim_bool(ui.ctx(), play_resp.id.with("ph"), play_resp.hovered(), 0.1);
+                        if h > 0.0 || ph > 0.0 {
+                            ui.painter().circle_filled(play_center, 13.0, if ph > 0.0 { super::transfer::SPOTIFY } else { theme::glass(0.18) });
+                            icon_at(ui, play_center, icon::PLAY, 11.0, if ph > 0.0 { Color32::from_rgb(11, 11, 11) } else { theme::text() });
+                        }
+                        let in_play = play_rect.contains(ui.input(|i| i.pointer.hover_pos().unwrap_or_default()));
+                        if play_resp.clicked() {
+                            app.suggestions = Default::default();
+                            app.search_focused = false;
+                            app.actions.push(Action::PlayQuery(term.clone()));
+                            break;
+                        }
+
                         // A past search can be removed from the account's history.
                         if let Some(token) = s.forget {
                             let x = Rect::from_center_size(pos2(r.right() - 22.0, r.center().y), Vec2::splat(30.0));
@@ -1052,7 +1085,7 @@ pub fn suggestions(app: &mut App, ctx: &egui::Context) {
                             }
                         }
                         // Pointer-down, not click: the text box loses focus (hiding this) first.
-                        if resp.is_pointer_button_down_on() || resp.clicked() {
+                        if !in_play && (resp.is_pointer_button_down_on() || resp.clicked()) {
                             app.suggestions = Default::default();
                             app.search_focused = false;
                             app.actions.push(Action::Go(Page::Search(term)));
