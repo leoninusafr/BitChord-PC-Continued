@@ -2,7 +2,7 @@
 ; Generates a clean, modern installer with 1-click complete residue-free uninstall
 
 !define PRODUCT_NAME "BitChord"
-!define PRODUCT_VERSION "2.2.1"
+!define PRODUCT_VERSION "2.2.2"
 !define PRODUCT_PUBLISHER "leoninusafr"
 !define PRODUCT_WEB_SITE "https://github.com/leoninusafr/BitChord-PC-Continued"
 !define PRODUCT_EXE "bitchord.exe"

@@ -629,17 +629,23 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
     let right_gap = super::titlebar::right_gap(ui.ctx(), row, 20.0);
     let cy = panel.top() + 18.0;
 
-    // Floating Frosted Glass Backdrop:
-    // Smooth translucent liquid glass starting at screen.top() so content scrolling underneath remains softly visible without cutoffs
+    // Rich Frosted Glass Backdrop:
+    // Dense translucent mask starting at screen.top() so scrolled content underneath stays softly tinted
+    // without bleeding ghost text behind the search box or top icons.
     let screen = ui.ctx().content_rect();
-    let bar_bottom = row.bottom() + 4.0;
+    let bar_bottom = row.bottom() + 6.0;
     let glass_rect = Rect::from_min_max(
         pos2(panel.left() - 28.0, screen.top()),
         pos2(panel.right() + 28.0, bar_bottom),
     );
-    ui.painter().rect_filled(glass_rect, 0.0, theme::panel(0.38));
+    ui.painter().rect_filled(glass_rect, 0.0, theme::panel(0.86));
     ui.painter().rect_filled(glass_rect, 0.0, theme::glass(0.06));
-    ui.painter().hline(glass_rect.x_range(), glass_rect.bottom(), egui::Stroke::new(1.0, theme::glass(0.08)));
+    ui.painter().hline(glass_rect.x_range(), glass_rect.bottom(), egui::Stroke::new(1.0, theme::glass(0.12)));
+    let feather = Rect::from_min_max(pos2(glass_rect.left(), glass_rect.bottom() + 1.0), pos2(glass_rect.right(), glass_rect.bottom() + 15.0));
+    vgradient(ui.painter(), feather, theme::panel(0.32), Color32::TRANSPARENT);
+    // Block pointer pass-through to scrolled content behind the header, while allowing window dragging.
+    ui.interact(glass_rect, ui.scope_id().with("top-bar-scrim"), Sense::hover());
+    super::titlebar::drag_area(ui, glass_rect, "top-bar");
 
     // 1. LEFT SECTION: Back, Forward, Spicetify Random Song Dice ("Würfel")
     let left_start = panel.left();
@@ -679,14 +685,12 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
     // 2. CENTER SECTION: Home Button (left of search), Search Pill, Discover/New
     let right = panel.right() - right_gap;
 
-    // Minimum gap requested by user:
-    // "mindestens so viel Abstand wie eben der Vor- und Zurück-Button zueinander haben oder vielleicht auch etwas mehr minimal"
     const HOME_SEARCH_GAP: f32 = 9.0;
     const BTN_RADIUS: f32 = 16.0; // 32px diameter circle buttons
 
     // Safe boundaries to prevent collisions with Dice/Nav on left or Account on right
     let left_boundary = left_start + 108.0;
-    let right_boundary = right - 64.0;
+    let right_boundary = right - 74.0;
     let cx = panel.center().x;
 
     let clear_left = (cx - left_boundary).max(40.0);
@@ -695,7 +699,7 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
 
     // Calculate dynamic search width so [Home] [Search Pill] [Discover] stays centered and never overlaps
     let wing_w = BTN_RADIUS * 2.0 + HOME_SEARCH_GAP;
-    let max_search_w = ((clear_half - wing_w) * 2.0).clamp(34.0, 260.0);
+    let max_search_w = ((clear_half - wing_w) * 2.0).clamp(34.0, 360.0);
     let search_w = max_search_w;
 
     let s_rect = Rect::from_center_size(pos2(cx, cy), vec2(search_w, 34.0));
@@ -712,18 +716,26 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
         app.actions.push(Action::Go(Page::Home));
     }
 
-    // Centered Search Pill
-    let s_field = ui.interact(s_rect, ui.scope_id().with("top-search-pill"), Sense::click()).on_hover_cursor(egui::CursorIcon::Text);
+    // Centered Search Pill (keep clear button area separate so clicks on X are never stolen)
+    let clearable = search_w > 70.0 && !app.search_text.is_empty();
+    let x_rect = Rect::from_center_size(pos2(s_rect.right() - 16.0, cy), Vec2::splat(24.0));
+    let pill_click_rect = if clearable {
+        Rect::from_min_max(s_rect.min, pos2(x_rect.left() - 2.0, s_rect.bottom()))
+    } else {
+        s_rect
+    };
+    let s_field = ui.interact(pill_click_rect, ui.scope_id().with("top-search-pill"), Sense::click()).on_hover_cursor(egui::CursorIcon::Text);
     app.search_rect = Some(s_rect);
     let sf = theme::anim_bool(ui.ctx(), "top-search-focus", app.search_focused, 0.2);
-    ui.painter().rect_filled(s_rect, 17.0, theme::glass(0.09 + 0.05 * sf));
+    ui.painter().rect_filled(s_rect, 17.0, theme::panel(0.55));
+    ui.painter().rect_filled(s_rect, 17.0, theme::glass(0.10 + 0.06 * sf));
     if sf > 0.0 {
-        ui.painter().rect_stroke(s_rect, 17.0, egui::Stroke::new(1.0, theme::glass(0.25 * sf)), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(s_rect, 17.0, egui::Stroke::new(1.0, theme::glass(0.28 * sf)), egui::StrokeKind::Inside);
     }
     glyphs::draw(ui, pos2(s_rect.left() + 16.0, cy), 15.0, glyphs::SEARCH, if sf > 0.0 { theme::text() } else { theme::text_dim() });
 
     if search_w > 70.0 {
-        let s_inner = Rect::from_min_max(pos2(s_rect.left() + 32.0, s_rect.top() + 2.0), pos2(s_rect.right() - 26.0, s_rect.bottom() - 2.0));
+        let s_inner = Rect::from_min_max(pos2(s_rect.left() + 32.0, s_rect.top() + 2.0), pos2(s_rect.right() - 30.0, s_rect.bottom() - 2.0));
         let placeholder = if search_w > 150.0 { "What do you want to play?" } else { "Search..." };
 
         // Up and Down walk suggestions
@@ -767,17 +779,28 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
         app.search_focused = edit.has_focus();
 
         let mut cleared = false;
-        if !app.search_text.is_empty() {
-            let x_rect = Rect::from_center_size(pos2(s_rect.right() - 14.0, cy), Vec2::splat(20.0));
-            let x_resp = ui.interact(x_rect, ui.scope_id().with("top-s-clear"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-            icon_at(ui, x_rect.center(), icon::X, 14.0, theme::text_dim());
+        if clearable {
+            let x_resp = named(ui.interact(x_rect, ui.scope_id().with("top-s-clear"), Sense::click()), "Clear search")
+                .on_hover_text("Clear search")
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            let xh = theme::anim_bool(ui.ctx(), x_resp.id.with("xh"), x_resp.hovered(), 0.12);
+            if xh > 0.0 {
+                ui.painter().circle_filled(x_rect.center(), 11.0, theme::glass(0.14 * xh));
+            }
+            icon_at(ui, x_rect.center(), icon::X, 14.0, theme::lerp_color(theme::text_dim(), theme::text(), xh));
             if x_resp.clicked() {
                 app.search_text.clear();
-                app.search_synced = String::new();
+                app.search_synced.clear();
+                app.search_due = None;
                 app.suggestions = Default::default();
                 app.suggest_sel = None;
                 cleared = true;
-                edit.request_focus();
+                if matches!(app.page, Page::Search(_)) {
+                    app.search_refocus = true;
+                    app.actions.push(Action::Go(Page::Search(String::new())));
+                } else {
+                    edit.request_focus();
+                }
             }
         }
 

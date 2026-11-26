@@ -521,14 +521,15 @@ pub(super) fn page_title(ui: &mut Ui, title: &str) {
 
 // ------------------------------------------------------------------ search
 
-fn search(app: &mut App, ui: &mut Ui, q: &str, now: f64) {
+fn search(app: &mut App, ui: &mut Ui, raw_q: &str, now: f64) {
     let pick = super::transfer::pick_banner(app, ui);
     page_title(ui, "Search");
     ui.add_space(8.0);
+    let q = raw_q.trim();
     // Coming from a suggestion, the sidebar or a link, the field says what's shown.
     if app.search_synced != q {
         app.search_synced = q.to_owned();
-        app.search_text = q.trim().to_owned();
+        app.search_text = q.to_owned();
     }
 
     let filter_id = egui::Id::unique("search-category-filter");
@@ -547,7 +548,7 @@ fn search(app: &mut App, ui: &mut Ui, q: &str, now: f64) {
     });
     ui.add_space(14.0);
 
-    if q.trim().is_empty() {
+    if q.is_empty() {
         ui.add_space(10.0);
         recent_searches(ui, app);
         return;
@@ -588,10 +589,11 @@ fn search(app: &mut App, ui: &mut Ui, q: &str, now: f64) {
         }
     };
 
-    // "Spotify" tab: show full list of Spotify songs and playlists
+    let sp_data = app.spotify_search.as_ref().filter(|(sq, _, _)| sq.trim() == q);
+
+    // "Spotify" tab: show pure Spotify catalog songs and playlists
     if filter == 5 {
         let is_loading = app.spotify_search_loading;
-        let sp_data = app.spotify_search.as_ref().filter(|(sq, _, _)| sq == q);
 
         ui.horizontal(|ui| {
             let badge_r = Rect::from_center_size(pos2(ui.cursor().left() + 10.0, ui.cursor().top() + 12.0), Vec2::splat(22.0));
@@ -665,141 +667,209 @@ fn search(app: &mut App, ui: &mut Ui, q: &str, now: f64) {
         return;
     }
 
-    if app.search.as_ref().is_none_or(|r| r.query != q) {
+    let ytm_ready = app.search.as_ref().filter(|r| r.query.trim() == q);
+    if ytm_ready.is_none() && sp_data.is_none() {
         ui.add_space(14.0);
         placeholder(app, ui, now, 2, CARD);
         return;
     }
+
     let rows = Rows::new(app, now);
-    let Some(r) = &app.search else { return };
+    let empty_tracks: Vec<Track> = Vec::new();
+    let empty_cards: Vec<Card> = Vec::new();
+    let yt_tracks = ytm_ready.map_or(&empty_tracks[..], |r| &r.tracks[..]);
+    let yt_artists = ytm_ready.map_or(&empty_cards[..], |r| &r.artists[..]);
+    let yt_albums = ytm_ready.map_or(&empty_cards[..], |r| &r.albums[..]);
+    let yt_playlists = ytm_ready.map_or(&empty_cards[..], |r| &r.playlists[..]);
+
+    let empty_sp_tracks: Vec<crate::transfer::spotify::Track> = Vec::new();
+    let empty_sp_pls: Vec<crate::transfer::spotify::Entry> = Vec::new();
+    let sp_tracks = sp_data.map_or(&empty_sp_tracks[..], |(_, tr, _)| &tr[..]);
+    let sp_pls = sp_data.map_or(&empty_sp_pls[..], |(_, _, pl)| &pl[..]);
+
+    let clean_title = |s: &str| s.split(['(', '[']).next().unwrap_or(s).split(" - ").next().unwrap_or(s).trim().to_lowercase();
+    let matches_yt = |yt: &Track, st: &crate::transfer::spotify::Track| {
+        let st_name = clean_title(&st.name);
+        let yt_name = clean_title(&yt.title);
+        let st_artist = st.artists.first().map(|a| a.to_lowercase()).unwrap_or_default();
+        !st_name.is_empty() && st_name == yt_name && !st_artist.is_empty() && yt.artist_line().to_lowercase().contains(&st_artist)
+    };
+
+    #[derive(Clone)]
+    enum UnifiedSong<'a> {
+        Ytm(usize, &'a Track),
+        Spotify(&'a crate::transfer::spotify::Track),
+    }
+
+    // Build ONE unified combined song list:
+    // Top Spotify hits (which capture lyrics, popularity & exact intent) are anchored first —
+    // using the instant YouTube Music song when both catalogs agree, or the Spotify track directly when YTM missed it.
+    let mut used_ytm = vec![false; yt_tracks.len()];
+    let mut combined_songs: Vec<UnifiedSong<'_>> = Vec::new();
+    let mut used_sp = vec![false; sp_tracks.len()];
+
+    if !pick {
+        for (si, st) in sp_tracks.iter().enumerate().take(6) {
+            if let Some(yi) = yt_tracks.iter().position(|yt| matches_yt(yt, st)) {
+                if !used_ytm[yi] {
+                    used_ytm[yi] = true;
+                    combined_songs.push(UnifiedSong::Ytm(yi, &yt_tracks[yi]));
+                }
+            } else {
+                combined_songs.push(UnifiedSong::Spotify(st));
+            }
+            used_sp[si] = true;
+        }
+    }
+    for (yi, yt) in yt_tracks.iter().enumerate() {
+        if !used_ytm[yi] {
+            combined_songs.push(UnifiedSong::Ytm(yi, yt));
+        }
+    }
+    if !pick {
+        for (si, st) in sp_tracks.iter().enumerate() {
+            if !used_sp[si] && !yt_tracks.iter().any(|yt| matches_yt(yt, st)) {
+                combined_songs.push(UnifiedSong::Spotify(st));
+            }
+        }
+    }
+
+    // Combine playlists from YTM and Spotify cleanly (deduplicated by lowercase name)
+    let mut combined_playlists: Vec<Card> = yt_playlists.to_vec();
+    for sp in sp_pls {
+        if !combined_playlists.iter().any(|p| p.title.eq_ignore_ascii_case(&sp.name)) {
+            combined_playlists.push(Card {
+                title: sp.name.clone(),
+                subtitle: if sp.owner.is_empty() { "Spotify Playlist".to_string() } else { format!("Spotify • {}", sp.owner) },
+                thumbs: super::transfer::spotify_thumbs(&sp.art),
+                target: Target::Playlist(format!("sp:{}", sp.source.id())),
+                round: false,
+                links: vec![crate::model::Link { name: sp.owner.clone(), id: None }],
+            });
+        }
+    }
+
     let acts = &mut app.actions;
     let liked = &app.liked;
-    let sp_extra: Vec<crate::transfer::spotify::Track> = app
-        .spotify_search
-        .as_ref()
-        .filter(|(sq, _, _)| sq == q)
-        .map(|(_, sp_tracks, _)| {
-            sp_tracks
-                .iter()
-                .filter(|st| {
-                    let st_name = st.name.split(['(', '[']).next().unwrap_or(&st.name).trim().to_lowercase();
-                    let st_artist = st.artists.first().map(|a| a.to_lowercase()).unwrap_or_default();
-                    !r.tracks.iter().any(|yt| {
-                        let yt_name = yt.title.split(['(', '[']).next().unwrap_or(&yt.title).trim().to_lowercase();
-                        yt_name == st_name && yt.artist_line().to_lowercase().contains(&st_artist)
-                    })
-                })
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
 
-    if r.tracks.is_empty() && r.artists.is_empty() && r.albums.is_empty() && r.playlists.is_empty() && sp_extra.is_empty() {
+    if combined_songs.is_empty() && yt_artists.is_empty() && yt_albums.is_empty() && combined_playlists.is_empty() {
         ui.add_space(18.0);
         ui.label(RichText::new("No results found").font(theme::bold(20.0)).color(theme::text()));
         return;
     }
 
-    match filter {
-        1 => {
-            // "Songs" tab: show full list of songs + extra Spotify catalog matches
-            ui.label(RichText::new("Songs").font(theme::bold(22.0)).color(theme::text()));
-            ui.add_space(8.0);
-            for (i, t) in r.tracks.iter().enumerate() {
-                let o = RowOpts { pick, ..rows.opts(liked, t, None, false) };
+    let paint_unified_song = |ui: &mut Ui, song: &UnifiedSong<'_>, id_salt: &str, show_album: bool, acts: &mut Vec<Action>| {
+        match song {
+            UnifiedSong::Ytm(idx, t) => {
+                let o = RowOpts { pick, ..rows.opts(liked, t, None, show_album) };
                 if track_row(ui, t, &o, acts).clicked() {
-                    acts.push(if pick { Action::TransferPick(t.clone()) } else { Action::Play(r.tracks.clone(), i) });
+                    acts.push(if pick { Action::TransferPick((*t).clone()) } else { Action::Play(yt_tracks.to_vec(), *idx) });
                 }
             }
-            if !sp_extra.is_empty() && !pick {
-                ui.add_space(22.0);
-                ui.horizontal(|ui| {
-                    let badge_r = Rect::from_center_size(pos2(ui.cursor().left() + 10.0, ui.cursor().top() + 12.0), Vec2::splat(18.0));
-                    super::transfer::badge(ui, badge_r);
-                    ui.add_space(24.0);
-                    ui.label(RichText::new("More from Spotify Catalog").font(theme::bold(20.0)).color(theme::text()));
-                });
-                ui.add_space(8.0);
-                for t in &sp_extra {
-                    paint_spotify_track_row(ui, t, "sp_songs_h", acts);
+            UnifiedSong::Spotify(st) => {
+                paint_spotify_track_row(ui, st, id_salt, acts);
+            }
+        }
+    };
+
+    match filter {
+        1 => {
+            // "Songs" tab: unified YouTube Music + Spotify tracks
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Songs").font(theme::bold(22.0)).color(theme::text()));
+                if app.spotify_search_loading {
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("Syncing Spotify…").font(theme::regular(13.0)).color(theme::text_dim()));
                 }
+            });
+            ui.add_space(8.0);
+            for song in &combined_songs {
+                paint_unified_song(ui, song, "u_songs", false, acts);
             }
         }
         2 => {
-            // "Playlists" tab: show grid of playlists
+            // "Playlists" tab: combined YouTube Music + Spotify playlists
             ui.label(RichText::new("Playlists").font(theme::bold(22.0)).color(theme::text()));
             ui.add_space(10.0);
-            card_grid(ui, &r.playlists, acts);
+            card_grid(ui, &combined_playlists, acts);
         }
         3 => {
-            // "Artists" tab: show grid of artists
+            // "Artists" tab
             ui.label(RichText::new("Artists").font(theme::bold(22.0)).color(theme::text()));
             ui.add_space(10.0);
-            card_grid(ui, &r.artists, acts);
+            card_grid(ui, yt_artists, acts);
         }
         4 => {
-            // "Albums" tab: show grid of albums
+            // "Albums" tab
             ui.label(RichText::new("Albums").font(theme::bold(22.0)).color(theme::text()));
             ui.add_space(10.0);
-            card_grid(ui, &r.albums, acts);
+            card_grid(ui, yt_albums, acts);
         }
         _ => {
-            // "All" tab: Top result + 4 songs, then Artists, Albums, More songs, Playlists, Spotify
+            // "All" tab: Unified Top Result + Top 4 Unified Songs, then Artists, Albums, More songs, Playlists
             ui.horizontal_top(|ui| {
-                if let Some(top) = r.artists.first().filter(|a| a.title.eq_ignore_ascii_case(q.trim())) {
+                if let Some(top) = yt_artists.first().filter(|a| a.title.eq_ignore_ascii_case(q)) {
                     top_result(ui, top, false, acts);
-                } else if let Some(t) = r.tracks.first() {
-                    let c = Card {
-                        title: t.title.clone(),
-                        subtitle: format!("Song • {}", t.artist_line()),
-                        thumbs: t.thumbs.clone(),
-                        target: Target::Song(t.clone()),
-                        round: false,
-                        links: t.artists.clone(),
+                } else if let Some(first_song) = combined_songs.first() {
+                    let c = match first_song {
+                        UnifiedSong::Ytm(_, t) => Card {
+                            title: t.title.clone(),
+                            subtitle: format!("Song • {}", t.artist_line()),
+                            thumbs: t.thumbs.clone(),
+                            target: Target::Song((*t).clone()),
+                            round: false,
+                            links: t.artists.clone(),
+                        },
+                        UnifiedSong::Spotify(st) => {
+                            let synth = Track {
+                                id: format!("sp:top:{}", st.name),
+                                title: st.name.clone(),
+                                artists: st.artists.iter().map(|a| crate::model::Link { name: a.clone(), id: None }).collect(),
+                                album: None,
+                                duration: st.duration,
+                                thumbs: super::transfer::spotify_thumbs(&st.art),
+                                track_nr: None,
+                                plays: None,
+                                music_video: false,
+                            };
+                            Card {
+                                title: st.name.clone(),
+                                subtitle: format!("Song • {}", st.artist_line()),
+                                thumbs: super::transfer::spotify_thumbs(&st.art),
+                                target: Target::Song(synth),
+                                round: false,
+                                links: st.artists.iter().map(|a| crate::model::Link { name: a.clone(), id: None }).collect(),
+                            }
+                        }
                     };
                     top_result(ui, &c, pick, acts);
                 }
                 ui.add_space(24.0);
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Songs").font(theme::bold(24.0)));
-                    ui.add_space(8.0);
-                    for (i, t) in r.tracks.iter().take(4).enumerate() {
-                        let o = RowOpts { pick, ..rows.opts(liked, t, None, false) };
-                        if track_row(ui, t, &o, acts).clicked() {
-                            acts.push(if pick { Action::TransferPick(t.clone()) } else { Action::Play(r.tracks.clone(), i) });
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Songs").font(theme::bold(24.0)));
+                        if app.spotify_search_loading {
+                            ui.add_space(10.0);
+                            ui.label(RichText::new("Syncing Spotify…").font(theme::regular(12.5)).color(theme::text_dim()));
                         }
+                    });
+                    ui.add_space(8.0);
+                    for song in combined_songs.iter().take(4) {
+                        paint_unified_song(ui, song, "u_top4", false, acts);
                     }
                 });
             });
-            card_row(ui, "s-artists", "Artists", &r.artists, acts);
-            card_row(ui, "s-albums", "Albums", &r.albums, acts);
-            if r.tracks.len() > 4 {
+            card_row(ui, "s-artists", "Artists", yt_artists, acts);
+            card_row(ui, "s-albums", "Albums", yt_albums, acts);
+            if combined_songs.len() > 4 {
                 ui.add_space(26.0);
                 ui.label(RichText::new("More songs").font(theme::bold(24.0)));
                 ui.add_space(10.0);
-                for (i, t) in r.tracks.iter().enumerate().skip(4) {
-                    let o = RowOpts { pick, ..rows.opts(liked, t, None, true) };
-                    if track_row(ui, t, &o, acts).clicked() {
-                        acts.push(if pick { Action::TransferPick(t.clone()) } else { Action::Play(r.tracks.clone(), i) });
-                    }
+                for song in combined_songs.iter().skip(4) {
+                    paint_unified_song(ui, song, "u_more", true, acts);
                 }
             }
-            card_row(ui, "s-pl", "Playlists", &r.playlists, acts);
-
-            // Spotify section on "All" tab (unique catalog tracks not already listed above)
-            if !sp_extra.is_empty() && !pick {
-                ui.add_space(26.0);
-                ui.horizontal(|ui| {
-                    let badge_r = Rect::from_center_size(pos2(ui.cursor().left() + 10.0, ui.cursor().top() + 12.0), Vec2::splat(18.0));
-                    super::transfer::badge(ui, badge_r);
-                    ui.add_space(24.0);
-                    ui.label(RichText::new("From Spotify Catalog").font(theme::bold(24.0)));
-                });
-                ui.add_space(10.0);
-                for t in sp_extra.iter().take(6) {
-                    paint_spotify_track_row(ui, t, "sp_all_h", acts);
-                }
-            }
+            card_row(ui, "s-pl", "Playlists", &combined_playlists, acts);
         }
     }
 }

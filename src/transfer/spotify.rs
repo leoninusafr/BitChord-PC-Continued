@@ -431,33 +431,47 @@ impl Client {
         });
         let res = self.query("searchDesktop", variables).await?;
 
-        let mut tracks = Vec::new();
+        let parse_track = |d: &Value| -> Option<(String, Track)> {
+            let name = d["name"].as_str()?.trim().to_string();
+            let id = d["uri"].as_str().and_then(|u| u.strip_prefix("spotify:track:")).unwrap_or_default().to_string();
+            let artists: Vec<String> = d["artists"]["items"]
+                .as_array()
+                .map(|arr| arr.iter().filter_map(|a| a["profile"]["name"].as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            if name.is_empty() || artists.is_empty() {
+                return None;
+            }
+            let art = d["albumOfTrack"]["coverArt"]["sources"]
+                .as_array()
+                .and_then(|imgs| imgs.iter().find(|s| s["width"].as_u64() == Some(300)).or_else(|| imgs.first()))
+                .and_then(|img| img["url"].as_str())
+                .map(String::from);
+            let duration = d["duration"]["totalMilliseconds"].as_u64().map(|ms| ((ms + 500) / 1000) as u32);
+            Some((id, Track { name, artists, local: false, art, duration }))
+        };
+
+        let mut tracks: Vec<(String, Track)> = Vec::new();
+        let mut push_track = |entry: (String, Track)| {
+            let dup = (!entry.0.is_empty() && tracks.iter().any(|(id, _)| id == &entry.0))
+                || tracks.iter().any(|(_, t)| t.name.eq_ignore_ascii_case(&entry.1.name) && t.artist_line().eq_ignore_ascii_case(&entry.1.artist_line()));
+            if !dup {
+                tracks.push(entry);
+            }
+        };
+
+        if let Some(items) = res["data"]["searchV2"]["topResultsV2"]["itemsV2"].as_array() {
+            for item in items {
+                if item["item"]["__typename"].as_str() == Some("TrackResponseWrapper")
+                    && let Some(parsed) = parse_track(&item["item"]["data"])
+                {
+                    push_track(parsed);
+                }
+            }
+        }
         if let Some(items) = res["data"]["searchV2"]["tracksV2"]["items"].as_array() {
             for item in items {
-                let d = &item["item"]["data"];
-                let name = d["name"].as_str().unwrap_or_default().to_string();
-                let id = d["uri"].as_str().and_then(|u| u.strip_prefix("spotify:track:")).unwrap_or_default().to_string();
-                let artists: Vec<String> = d["artists"]["items"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(|a| a["profile"]["name"].as_str().map(String::from)).collect())
-                    .unwrap_or_default();
-                let art = d["albumOfTrack"]["coverArt"]["sources"]
-                    .as_array()
-                    .and_then(|imgs| imgs.iter().find(|s| s["width"].as_u64() == Some(300)).or_else(|| imgs.first()))
-                    .and_then(|img| img["url"].as_str())
-                    .map(String::from);
-                let duration = d["duration"]["totalMilliseconds"].as_u64().map(|ms| ((ms + 500) / 1000) as u32);
-                if !name.is_empty() && !artists.is_empty() {
-                    tracks.push((
-                        id,
-                        Track {
-                            name,
-                            artists,
-                            local: false,
-                            art,
-                            duration,
-                        },
-                    ));
+                if let Some(parsed) = parse_track(&item["item"]["data"]) {
+                    push_track(parsed);
                 }
             }
         }
@@ -916,6 +930,9 @@ fn chunk_urls(js: &str) -> Vec<String> {
     }
     urls.sort();
     urls.dedup();
+    // Put search/playlist chunks first so query hashes (like searchDesktop in xpui-routes-search)
+    // are discovered on the first request rather than after 150+ unrelated chunks.
+    urls.sort_by_key(|u| !u.contains("search"));
     urls
 }
 

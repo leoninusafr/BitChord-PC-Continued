@@ -295,6 +295,17 @@ impl App {
                 }
             }
             Action::Open(Target::Song(t)) | Action::Radio(t) => {
+                if t.id.starts_with("sp:") || t.id.starts_with("spotify:") {
+                    let st = crate::transfer::spotify::Track {
+                        name: t.title.clone(),
+                        artists: t.artists.iter().map(|a| a.name.clone()).collect(),
+                        local: false,
+                        art: t.thumbs.first().map(|th| th.url.clone()),
+                        duration: t.duration,
+                    };
+                    self.apply(Action::PlaySpotify(st));
+                    return;
+                }
                 self.queue_source = None;
                 self.play_list(vec![t.clone()], 0);
                 if !self.radio_pending {

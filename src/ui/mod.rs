@@ -1679,13 +1679,6 @@ impl eframe::App for App {
         if !self.fullscreen && !covered {
             // The top of the window, down to the search box's row: what's on it comes after.
             titlebar::drag_area(ui, egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), titlebar::HEIGHT)), "main");
-
-            // Continuous top bar frosted glass backdrop across the entire window (stretching behind sidebar and right drawer tiles)
-            let top_header_h = titlebar::top_margin(14, 42.0) as f32 + 48.0;
-            let top_header_rect = egui::Rect::from_min_max(egui::pos2(screen.left(), screen.top()), egui::pos2(screen.right(), top_header_h));
-            ui.painter().rect_filled(top_header_rect, 0.0, theme::panel(0.38));
-            ui.painter().rect_filled(top_header_rect, 0.0, theme::glass(0.06));
-            ui.painter().hline(top_header_rect.x_range(), top_header_rect.bottom(), egui::Stroke::new(1.0, theme::glass(0.08)));
         }
         if !self.fullscreen {
             // Liquid Frosted Glass bottom player bar spanning the full width of the window (all the way to the left edge)
