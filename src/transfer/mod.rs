@@ -218,6 +218,7 @@ pub struct Transfer {
     data_dir: PathBuf,
     wake: Arc<dyn Fn() + Send + Sync>,
     spotify_client: Mutex<Option<(Instant, Arc<spotify::Client>)>>,
+    anon_spotify_client: Mutex<Option<(Instant, Arc<spotify::Client>)>>,
 }
 
 /// The progress file: everything needed to pick a transfer up again.
@@ -256,6 +257,7 @@ impl Transfer {
             data_dir: data_dir.to_owned(),
             wake,
             spotify_client: Mutex::new(None),
+            anon_spotify_client: Mutex::new(None),
         });
         *this.resumable.lock().unwrap() = this.find_resumable();
         this
@@ -546,19 +548,41 @@ impl Transfer {
         }
     }
 
-    /// Returns true if the user has signed in to Spotify.
-    pub fn is_connected(&self) -> bool {
-        self.cookie().is_some()
+    async fn spotify_search_client(&self, force_fresh: bool) -> Result<Arc<spotify::Client>> {
+        if self.cookie().is_some() {
+            if force_fresh {
+                *self.spotify_client.lock().unwrap() = None;
+            }
+            if let Ok(c) = self.spotify_client().await {
+                return Ok(c);
+            }
+        }
+        if force_fresh {
+            *self.anon_spotify_client.lock().unwrap() = None;
+        }
+        {
+            let guard = self.anon_spotify_client.lock().unwrap();
+            if let Some((created, client)) = guard.as_ref()
+                && created.elapsed() < Duration::from_secs(45 * 60)
+            {
+                return Ok(client.clone());
+            }
+        }
+        let client = Arc::new(spotify::Client::connect(None, &self.data_dir).await?);
+        *self.anon_spotify_client.lock().unwrap() = Some((Instant::now(), client.clone()));
+        Ok(client)
     }
 
-    /// Search Spotify tracks and playlists for live search synchronization.
+    /// Search Spotify tracks and playlists for live search synchronization (works signed-in and anonymously).
     pub async fn search_spotify(&self, query: &str) -> Result<(Vec<spotify::Track>, Vec<spotify::Entry>)> {
-        let client = self.spotify_client().await?;
-        let (tracks, pls) = tokio::join!(
-            client.search_tracks(query, 25),
-            client.search_playlists(query, 12),
-        );
-        Ok((tracks.unwrap_or_default(), pls.unwrap_or_default()))
+        let client = self.spotify_search_client(false).await?;
+        match client.search_desktop(query, 25).await {
+            Ok(res) => Ok(res),
+            Err(_) => {
+                let fresh = self.spotify_search_client(true).await?;
+                fresh.search_desktop(query, 25).await
+            }
+        }
     }
 
     pub fn set_paused(&self, paused: bool) {
@@ -1179,40 +1203,11 @@ fn signed_out(e: &anyhow::Error) -> bool {
 fn queries(t: &Track) -> Vec<String> {
     let title = plain_title(&t.name);
     let first = t.artists.first().map(String::as_str).unwrap_or_default();
-    let mut out = Vec::new();
-
-    // 1. "Artist - Title" (standard YouTube music & video format)
-    if !first.is_empty() {
-        out.push(format!("{first} - {title}").trim().to_owned());
+    let mut out = vec![format!("{title} {first}").trim().to_owned()];
+    let full = format!("{} {}", t.name, t.artists.join(" ")).trim().to_owned();
+    if !out.contains(&full) {
+        out.push(full);
     }
-    // 2. "Title Artist"
-    let q2 = format!("{title} {first}").trim().to_owned();
-    if !out.contains(&q2) {
-        out.push(q2);
-    }
-    // 3. "Artist Title"
-    if !first.is_empty() {
-        let q3 = format!("{first} {title}").trim().to_owned();
-        if !out.contains(&q3) {
-            out.push(q3);
-        }
-    }
-    // 4. "Title All Artists"
-    if t.artists.len() > 1 {
-        let all = t.artists.join(" ");
-        let q4 = format!("{title} {all}").trim().to_owned();
-        if !out.contains(&q4) {
-            out.push(q4);
-        }
-    }
-    // 5. Full raw Spotify title + Artist if different
-    if title != t.name {
-        let full = format!("{} {first}", t.name).trim().to_owned();
-        if !out.contains(&full) {
-            out.push(full);
-        }
-    }
-
     out
 }
 
@@ -1225,52 +1220,50 @@ fn plain_title(s: &str) -> &str {
     }
 }
 
-/// The best song result for a Spotify track, and whether it's surely the same song.
-/// Matches a Spotify track to a YouTube Music track.
+/// Matches a Spotify track to a YouTube Music song (never music videos).
 pub async fn match_spotify_track(api: &Api, t: &Track) -> Option<YtTrack> {
     search_song(api, t).await.ok().flatten().map(|(yt_track, _)| yt_track)
 }
 
+/// The best song result for a Spotify track, and whether it's surely the same song.
 pub async fn search_song(api: &Api, t: &Track) -> Result<Option<(YtTrack, bool)>> {
     let mut hits: Vec<YtTrack> = Vec::new();
     let add = |hits: &mut Vec<YtTrack>, found: Vec<YtTrack>| {
-        let new: Vec<YtTrack> = found.into_iter().take(5).filter(|h| !hits.iter().any(|x| x.id == h.id)).collect();
+        let new: Vec<YtTrack> = found
+            .into_iter()
+            .filter(|h| !h.music_video)
+            .take(5)
+            .filter(|h| !hits.iter().any(|x| x.id == h.id))
+            .collect();
         hits.extend(new);
     };
     let queries = queries(t);
 
-    // Phase 1: Search Songs catalog (pure music releases)
+    // Phase 1: Signed-out Songs catalog (pure music releases, no music videos)
     for q in &queries {
-        if let Ok(found) = ytm::search_songs(api, q, false).await {
-            add(&mut hits, found);
-            if let Some(b) = best(&hits, t).filter(|(_, sure)| *sure) {
-                return Ok(Some(b));
-            }
-        }
-    }
-
-    // Phase 2: Search Videos catalog (topic channels, official audio, uploads, music videos)
-    for q in queries.iter().take(2) {
-        if let Ok(found) = ytm::search_videos(api, q, false).await {
-            add(&mut hits, found);
-            if let Some(b) = best(&hits, t).filter(|(_, sure)| *sure) {
-                return Ok(Some(b));
-            }
-        }
-    }
-
-    // Phase 3: Signed-in search if an account is connected
-    if api.account().is_some() {
-        if let Some(q) = queries.first() {
-            if let Ok(found) = ytm::search_tracks_signed_in(api, q, ytm::Filter::Songs).await {
-                add(&mut hits, found);
-                if let Some(b) = best(&hits, t).filter(|(_, sure)| *sure) {
-                    return Ok(Some(b));
+        let found = match ytm::search_songs(api, q, false).await {
+            Ok(found) => found,
+            Err(e) => {
+                log::debug!("transfer: signed-out search refused ({e:#}); trying signed-in songs");
+                if api.account().is_some() {
+                    ytm::search_tracks_signed_in(api, q, ytm::Filter::Songs).await?
+                } else {
+                    return Err(e);
                 }
             }
-            if let Ok(found) = ytm::search_tracks_signed_in(api, q, ytm::Filter::Videos).await {
-                add(&mut hits, found);
-            }
+        };
+        add(&mut hits, found);
+        if let Some(b) = best(&hits, t).filter(|(_, sure)| *sure) {
+            return Ok(Some(b));
+        }
+    }
+
+    // Phase 2: Signed-in Songs catalog (catches major-label releases omitted signed out)
+    if api.account().is_some() {
+        match ytm::search_tracks_signed_in(api, &queries[0], ytm::Filter::Songs).await {
+            Ok(found) => add(&mut hits, found),
+            Err(e) if hits.is_empty() => return Err(e),
+            Err(e) => log::debug!("transfer: signed-in search: {e:#}"),
         }
     }
 
@@ -1365,18 +1358,15 @@ fn artist_matches(hit: &YtTrack, t: &Track) -> bool {
 
 /// Whether a result credits this artist: by name, give or take "The" and a typo, or as
 /// part of a group ("The Miracles" for "Smokey Robinson & The Miracles").
-/// Also checks video title since YouTube uploads and music videos often place the artist in the title.
 fn same_artist(hit: &YtTrack, artist: &str) -> bool {
     let name = |s: &str| {
         let s = s.trim();
         norm(s.get(..4).filter(|p| p.eq_ignore_ascii_case("the ")).map_or(s, |_| &s[4..]))
     };
     let (want, line) = (name(artist), norm(&hit.artist_line()));
-    let title_norm = norm(&hit.title);
     let members: Vec<String> = artist.split(" & ").flat_map(|p| p.split(" and ")).flat_map(|p| p.split(", ")).map(name).collect();
     !want.is_empty()
         && (line.contains(&want)
-            || title_norm.contains(&want)
             || hit.artists.iter().map(|a| name(&a.name)).any(|got| similar(&want, &got) || (members.len() > 1 && members.contains(&got))))
 }
 
@@ -1393,9 +1383,8 @@ fn gap(hit: &YtTrack, t: &Track) -> Option<u32> {
 }
 
 /// A different recording (a live take, an extended mix), not just another master.
-/// Allows up to 60s difference to accommodate music video intro/outro scenes.
 fn too_long_or_short(hit: &YtTrack, t: &Track) -> bool {
-    gap(hit, t).is_some_and(|g| g > 60.max(t.duration.unwrap_or(0) / 4))
+    gap(hit, t).is_some_and(|g| g > 15.max(t.duration.unwrap_or(0) / 8))
 }
 
 /// Lowercase alphanumerics, with "(feat. ...)" / " - Remastered" style suffixes cut off.

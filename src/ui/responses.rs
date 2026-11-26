@@ -122,6 +122,16 @@ impl App {
                 self.backend.request(Req::Suggest { query: q, round: self.suggest_round });
             }
         }
+        if self.search_due.is_some_and(|d| now >= d) {
+            self.search_due = None;
+            let q = self.search_text.trim().to_owned();
+            if !q.is_empty() && q != self.search_synced {
+                self.page = Page::Search(q.clone());
+                self.search_synced = q.clone();
+                self.backend.request(Req::Search(q.clone()));
+                self.trigger_spotify_search(&q);
+            }
+        }
     }
 
     /// A search's results are on screen: the first result clicked becomes what

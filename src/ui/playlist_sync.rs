@@ -221,9 +221,12 @@ pub fn analyze_playlists(
     let mut dsu = Dsu::new(n);
     let mut unresolved_conflicts: Vec<PlaylistConflict> = Vec::new();
 
-    // 3. Compare all pairs (i, j)
+    // 3. Compare cross-platform pairs (i, j)
     for i in 0..n {
         for j in (i + 1)..n {
+            if items[i].source_kind == items[j].source_kind {
+                continue;
+            }
             let pair_key = conflict_pair_key(&items[i].id, &items[j].id);
             let decision = decisions.get(&pair_key).map(String::as_str);
 
@@ -238,16 +241,14 @@ pub fn analyze_playlists(
             };
 
             if same_name && same_content {
-                // CASE 1: Both Name AND Content match!
-                // "zack, wird das sozusagen zu einer gemacht" -> Auto-unify immediately!
+                // CASE 1: Both Name AND Content match -> auto-unify immediately.
                 dsu.union(i, j);
             } else if same_name && !same_content {
-                // CASE 2: Name matches, but content differs!
+                // CASE 2: Name matches, but content differs.
                 match decision {
                     Some("merge") => dsu.union(i, j),
                     Some("separate") => {} // User explicitly wants them separated
                     _ => {
-                        // Unresolved conflict: prompt user
                         unresolved_conflicts.push(PlaylistConflict {
                             key: pair_key,
                             item_a: items[i].clone(),
@@ -262,13 +263,12 @@ pub fn analyze_playlists(
                         });
                     }
                 }
-            } else if !same_name && same_content && items[i].count.is_some_and(|c| c >= 3) {
-                // CASE 3: Content matches, but names differ!
+            } else if !same_name && same_content && items[i].count.is_some_and(|c| c >= 8) {
+                // CASE 3: Larger playlists with matching counts but different names.
                 match decision {
                     Some("merge") => dsu.union(i, j),
                     Some("separate") => {} // User explicitly wants them separated
                     _ => {
-                        // Unresolved conflict: prompt user
                         unresolved_conflicts.push(PlaylistConflict {
                             key: pair_key,
                             item_a: items[i].clone(),
@@ -379,13 +379,18 @@ pub fn render_conflict_banner(ui: &mut Ui, conflict: &PlaylistConflict, app: &mu
     let inner = rect.shrink(14.0);
     let cy = inner.center().y;
 
-    // Left Icon (Amber/Accent badge)
+    // Left Icon
     let icon_r = Rect::from_center_size(pos2(inner.left() + 20.0, cy), Vec2::splat(34.0));
     ui.painter().rect_filled(icon_r, 8.0, theme::glass(0.12));
     crate::ui::widgets::icon_at(ui, icon_r.center(), icon::ROTATE_CW, 17.0, theme::RED);
 
-    // Title & Description Text
-    let tx = icon_r.right() + 16.0;
+    // Right Action Buttons
+    let btns_w = 240.0_f32.min((inner.width() * 0.45).max(180.0));
+    let btns_r = Rect::from_min_max(pos2(inner.right() - btns_w, inner.top()), inner.max);
+
+    // Title & Description Text (clipped cleanly before buttons)
+    let tx = icon_r.right() + 14.0;
+    let text_max_w = (btns_r.left() - tx - 14.0).max(80.0);
     match &conflict.kind {
         ConflictKind::NameOnly {
             name,
@@ -396,23 +401,25 @@ pub fn render_conflict_banner(ui: &mut Ui, conflict: &PlaylistConflict, app: &mu
         } => {
             let ca_str = count_a.map_or_else(|| "?".to_string(), |c| c.to_string());
             let cb_str = count_b.map_or_else(|| "?".to_string(), |c| c.to_string());
-            ui.painter().text(
-                pos2(tx, cy - 10.0),
-                egui::Align2::LEFT_CENTER,
-                &format!("Playlist-Konflikt: \"{name}\""),
+            crate::ui::widgets::text_at(
+                ui,
+                pos2(tx, cy - 19.0),
+                &format!("Playlist conflict: \"{name}\""),
                 theme::semibold(14.5),
                 theme::text(),
+                text_max_w,
             );
-            ui.painter().text(
-                pos2(tx, cy + 10.0),
-                egui::Align2::LEFT_CENTER,
+            crate::ui::widgets::text_at(
+                ui,
+                pos2(tx, cy + 2.0),
                 &format!(
-                    "Gleicher Name, aber unterschiedlicher Inhalt: {} ({ca_str} Songs) vs. {} ({cb_str} Songs).",
+                    "Same name, different sizes: {} ({ca_str} songs) vs. {} ({cb_str} songs).",
                     source_a.label(),
                     source_b.label()
                 ),
                 theme::regular(12.5),
                 theme::text_dim(),
+                text_max_w,
             );
         }
         ConflictKind::ContentOnly {
@@ -422,41 +429,78 @@ pub fn render_conflict_banner(ui: &mut Ui, conflict: &PlaylistConflict, app: &mu
             source_b,
             count,
         } => {
-            ui.painter().text(
-                pos2(tx, cy - 10.0),
-                egui::Align2::LEFT_CENTER,
-                "Mögliches Playlist-Duplikat erkannt",
+            crate::ui::widgets::text_at(
+                ui,
+                pos2(tx, cy - 19.0),
+                "Possible duplicate playlist",
                 theme::semibold(14.5),
                 theme::text(),
+                text_max_w,
             );
-            ui.painter().text(
-                pos2(tx, cy + 10.0),
-                egui::Align2::LEFT_CENTER,
+            crate::ui::widgets::text_at(
+                ui,
+                pos2(tx, cy + 2.0),
                 &format!(
-                    "Gleicher Inhalt ({count} Songs), aber unterschiedliche Namen: \"{name_a}\" ({}) vs. \"{name_b}\" ({}).",
+                    "Matching count ({count} songs): \"{name_a}\" ({}) vs. \"{name_b}\" ({}).",
                     source_a.label(),
                     source_b.label()
                 ),
                 theme::regular(12.5),
                 theme::text_dim(),
+                text_max_w,
             );
         }
     }
 
-    // Right Action Buttons
-    let btns_w = 320.0;
-    let btns_r = Rect::from_min_max(pos2(inner.right() - btns_w, inner.top()), inner.max);
     ui.scope_builder(egui::UiBuilder::new().max_rect(btns_r), |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if pill(ui, "Getrennt halten", Some(icon::X), false).clicked() {
+            if pill(ui, "Keep separate", Some(icon::X), false).clicked() {
                 app.set_playlist_decision(&conflict.key, "separate");
-                app.toast("Playlists werden getrennt geführt.");
+                app.toast("Playlists kept separate.");
             }
             ui.add_space(8.0);
-            if pill(ui, "Zusammenführen", Some(icon::CHECK), true).clicked() {
+            if pill(ui, "Merge", Some(icon::CHECK), true).clicked() {
                 app.set_playlist_decision(&conflict.key, "merge");
-                app.toast("Playlists wurden zusammengeführt.");
+                app.toast("Playlists merged.");
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transfer::spotify::{Entry, Source};
+
+    fn ytm_card(id: &str, title: &str, songs: usize) -> Card {
+        Card {
+            title: title.into(),
+            subtitle: format!("Playlist • {songs} songs"),
+            thumbs: vec![],
+            target: Target::Playlist(id.into()),
+            round: false,
+            links: vec![],
+        }
+    }
+
+    fn sp_entry(id: &str, name: &str, songs: usize) -> Entry {
+        Entry {
+            source: Source::Playlist(id.into()),
+            name: name.into(),
+            owner: "User".into(),
+            count: Some(songs),
+            art: None,
+        }
+    }
+
+    #[test]
+    fn exact_match_unifies_and_same_platform_never_conflicts() {
+        let ytm = vec![ytm_card("pl1", "Gym Mix", 20), ytm_card("pl2", "Gym Mix", 15)];
+        let sp = vec![sp_entry("sp1", "Gym Mix", 20)];
+        let decisions = HashMap::new();
+        let (conflicts, cards) = analyze_playlists(&ytm, &sp, &decisions);
+        // pl1 and sp1 unify; pl2 conflicts only cross-platform with sp1, not with pl1.
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(cards.len(), 2);
+    }
 }

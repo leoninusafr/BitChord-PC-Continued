@@ -794,17 +794,21 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
             app.suggest_due = Some(now + delay);
 
             if !query.is_empty() && query != app.search_synced {
-                app.page = Page::Search(query.clone());
-                app.search_synced = query.clone();
-                app.backend.request(crate::backend::Req::Search(query.clone()));
-                app.trigger_spotify_search(&query);
+                app.search_due = Some(now + 0.25);
+            } else {
+                app.search_due = None;
             }
+        }
+        if let Some(due) = app.search_due {
+            let now = ui.input(|i| i.time);
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((due - now).max(0.0)));
         }
 
         if (edit.has_focus() || app.search_focused) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             let picked = app.suggest_sel.filter(|_| fresh).and_then(|s| app.suggestions.1.get(s)).map(|s| s.text.clone());
             let q = picked.unwrap_or_else(|| app.search_text.trim().to_owned());
             if !q.is_empty() {
+                app.search_due = None;
                 app.suggestions = Default::default();
                 app.search_focused = false;
                 app.actions.push(Action::Go(Page::Search(q)));
@@ -957,9 +961,9 @@ pub fn search_field(app: &mut App, ui: &mut Ui, width: f32) {
         app.suggest_due = Some(now + delay);
 
         if !query.is_empty() && query != app.search_synced {
-            app.search_synced = query.clone();
-            app.backend.request(crate::backend::Req::Search(query.clone()));
-            app.trigger_spotify_search(&query);
+            app.search_due = Some(now + 0.25);
+        } else {
+            app.search_due = None;
         }
     }
     // The event loop can otherwise sleep past the debounce deadline.
@@ -967,10 +971,15 @@ pub fn search_field(app: &mut App, ui: &mut Ui, width: f32) {
         let now = ui.input(|i| i.time);
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((due - now).max(0.0)));
     }
+    if let Some(due) = app.search_due {
+        let now = ui.input(|i| i.time);
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((due - now).max(0.0)));
+    }
     if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
         let picked = app.suggest_sel.filter(|_| fresh).and_then(|s| app.suggestions.1.get(s)).map(|s| s.text.clone());
         let q = picked.unwrap_or_else(|| app.search_text.trim().to_owned());
         if !q.is_empty() {
+            app.search_due = None;
             app.suggestions = Default::default();
             app.actions.push(Action::Go(Page::Search(q)));
         }

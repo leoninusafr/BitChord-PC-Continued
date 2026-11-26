@@ -372,6 +372,7 @@ pub struct App {
     /// Removals sent and not yet confirmed: the list is asked for again once they're done.
     forgets_pending: u32,
     suggest_due: Option<f64>,
+    search_due: Option<f64>,
 
     // page data
     home: Option<HomeState>,
@@ -714,6 +715,7 @@ impl App {
             suggest_round: 0,
             forgets_pending: 0,
             suggest_due: None,
+            search_due: None,
             home: None,
             home_loading: true,
             explore: None,
@@ -1025,6 +1027,7 @@ impl App {
         self.search_text = self.search_synced.clone();
         self.suggestions = Default::default();
         self.suggest_sel = None;
+        self.search_due = None;
         // Choosing a transfer match lasts while searching; any other page ends it.
         if !matches!(self.page, Page::Search(_)) {
             self.xfer.picking = None;
@@ -1241,10 +1244,10 @@ impl App {
         self.toast = Some((msg.into(), -1.0));
     }
 
-    /// Trigger asynchronous search on Spotify catalogue if Spotify is connected.
+    /// Trigger asynchronous search on Spotify catalogue (works both signed-in and anonymously).
     pub fn trigger_spotify_search(&mut self, query: &str) {
         let q = query.trim().to_owned();
-        if q.is_empty() || !self.transfer.is_connected() {
+        if q.is_empty() {
             return;
         }
         self.spotify_search_loading = true;
@@ -1252,10 +1255,20 @@ impl App {
         let bg_actions = self.bg_actions.clone();
         let b = self.backend.clone();
         self.backend.spawn(async move {
-            if let Ok((tracks, playlists)) = xfer.search_spotify(&q).await {
-                bg_actions.lock().unwrap().push(Action::SpotifySearchResults { query: q, tracks, playlists });
-                b.wake();
+            match xfer.search_spotify(&q).await {
+                Ok((tracks, playlists)) => {
+                    bg_actions.lock().unwrap().push(Action::SpotifySearchResults { query: q, tracks, playlists });
+                }
+                Err(e) => {
+                    log::debug!("spotify search failed for '{q}': {e:#}");
+                    bg_actions.lock().unwrap().push(Action::SpotifySearchResults {
+                        query: q,
+                        tracks: Vec::new(),
+                        playlists: Vec::new(),
+                    });
+                }
             }
+            b.wake();
         });
     }
 

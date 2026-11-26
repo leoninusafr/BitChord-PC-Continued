@@ -162,8 +162,10 @@ impl App {
                 }
             }
             Action::SpotifySearchResults { query, tracks, playlists } => {
-                self.spotify_search = Some((query, tracks, playlists));
-                self.spotify_search_loading = false;
+                if query == self.search_synced || self.search_text.trim() == query {
+                    self.spotify_search = Some((query, tracks, playlists));
+                    self.spotify_search_loading = false;
+                }
             }
             Action::OpenSpotifyPlaylist(entry) => {
                 self.page = Page::Library(super::LibTab::Playlists);
@@ -247,15 +249,14 @@ impl App {
                 let bg_actions = self.bg_actions.clone();
                 let b = self.backend.clone();
                 self.backend.spawn(async move {
-                    let mut songs = crate::ytm::search_songs(&api, &q, false).await.unwrap_or_default();
-                    if songs.is_empty() {
-                        songs = crate::ytm::search_videos(&api, &q, false).await.unwrap_or_default();
-                    }
+                    let me = api.account().is_some();
+                    let mut songs = crate::ytm::search_songs(&api, &q, me).await.unwrap_or_default();
+                    songs.retain(|t| !t.music_video);
                     if !songs.is_empty() {
                         bg_actions.lock().unwrap().push(Action::Play(songs, 0));
                         b.wake();
                     } else {
-                        bg_actions.lock().unwrap().push(Action::Toast(format!("No results for \"{q}\"")));
+                        bg_actions.lock().unwrap().push(Action::Toast(format!("No song found for \"{q}\"")));
                         b.wake();
                     }
                 });

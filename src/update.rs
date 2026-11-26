@@ -23,11 +23,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const LATEST: &str = "https://api.github.com/repos/grapedjuice/ytm-rs/releases/latest";
+const LATEST: &str = "https://api.github.com/repos/leoninusafr/BitChord-PC-Continued/releases/latest";
 #[allow(dead_code)]
-const ALL_RELEASES: &str = "https://api.github.com/repos/grapedjuice/ytm-rs/releases";
-const BY_TAG: &str = "https://api.github.com/repos/grapedjuice/ytm-rs/releases/tags/v";
-pub const RELEASES: &str = "https://github.com/grapedjuice/ytm-rs/releases";
+const ALL_RELEASES: &str = "https://api.github.com/repos/leoninusafr/BitChord-PC-Continued/releases";
+const BY_TAG: &str = "https://api.github.com/repos/leoninusafr/BitChord-PC-Continued/releases/tags/v";
+pub const RELEASES: &str = "https://github.com/leoninusafr/BitChord-PC-Continued/releases";
 
 /// Release notes by version: `None` while fetching or when there are none.
 type Notes = Arc<Mutex<std::collections::HashMap<String, Option<String>>>>;
@@ -38,7 +38,7 @@ pub enum State {
     Checking,
     UpToDate,
     Downloading { version: String, percent: u8 },
-    /// `installer` is the setup exe, or for the portable build the new ytm-rs.exe.
+    /// `installer` is the setup exe, or for the portable build the new bitchord.exe.
     Ready { version: String, installer: PathBuf },
     Failed(String),
 }
@@ -73,7 +73,7 @@ pub fn installed() -> bool {
     exe.parent().is_some_and(|d| d.join(marker).exists())
 }
 
-/// The `.app` bundle a binary is in (`X.app/Contents/MacOS/ytm-rs`).
+/// The `.app` bundle a binary is in (`X.app/Contents/MacOS/bitchord`).
 fn bundle_of(exe: &Path) -> Option<&Path> {
     exe.ancestors().nth(3).filter(|a| a.extension().is_some_and(|x| x == "app"))
 }
@@ -84,15 +84,21 @@ fn asset_name(version: &str) -> String {
     let arch = std::env::consts::ARCH;
     if cfg!(target_os = "linux") {
         let kind = if portable { "portable-" } else { "" };
-        return format!("ytm-rs-{kind}{version}-linux-{arch}.tar.gz");
+        return format!("bitchord-{kind}{version}-linux-{arch}.tar.gz");
     }
-    // ARM64 Windows builds have their own assets; x64 keeps the original names.
-    let (suffix, setup) = if cfg!(target_os = "macos") {
-        (format!("-macos-{arch}"), "dmg")
+    if cfg!(target_os = "macos") {
+        return if portable {
+            format!("bitchord-portable-{version}-macos-{arch}.zip")
+        } else {
+            format!("bitchord-setup-{version}-macos-{arch}.dmg")
+        };
+    }
+    let suffix = if cfg!(target_arch = "aarch64") { "-arm64" } else { "" };
+    if portable {
+        format!("bitchord-v{version}{suffix}-portable.zip")
     } else {
-        (if cfg!(target_arch = "aarch64") { "-arm64" } else { "" }.to_owned(), "exe")
-    };
-    if portable { format!("ytm-rs-portable-{version}{suffix}.zip") } else { format!("ytm-rs-setup-{version}{suffix}.{setup}") }
+        format!("bitchord-setup-{version}{suffix}.exe")
+    }
 }
 
 /// The portable build's folder: the download ships a `portable.txt` beside the exe
@@ -479,14 +485,18 @@ fn unzip_exe(zip: &Path, dir: &Path) -> anyhow::Result<PathBuf> {
     }
     let status = cmd.status()?;
     #[cfg(windows)]
-    let exe = dir.join("ytm-rs.exe");
-    // Everything is in one top-level folder: the binary, or on macOS the app bundle.
+    let exe = if dir.join("bitchord.exe").exists() {
+        dir.join("bitchord.exe")
+    } else {
+        dir.join("BitChord/bitchord.exe")
+    };
+    // Everything is in one top-level folder or at archive root.
     #[cfg(not(windows))]
     let exe = std::fs::read_dir(dir)?
         .flatten()
-        .flat_map(|e| [e.path().join("ytm-rs"), e.path().join("ytm-rs.app/Contents/MacOS/ytm-rs")])
+        .flat_map(|e| [e.path().join("bitchord"), e.path().join("bitchord.app/Contents/MacOS/bitchord")])
         .find(|p| p.is_file())
-        .unwrap_or_else(|| dir.join("ytm-rs"));
+        .unwrap_or_else(|| dir.join("bitchord"));
     anyhow::ensure!(status.success() && exe.exists(), "couldn't unpack {}", zip.display());
     Ok(exe)
 }

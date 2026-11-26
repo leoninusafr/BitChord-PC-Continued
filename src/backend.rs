@@ -781,7 +781,7 @@ impl Backend {
                     let tracks = match &target {
                         Target::Album(id) => ytm::album(api, id).await?.tracks,
                         Target::Playlist(id) => ytm::playlist(api, id, me, None).await?.tracks,
-                        Target::Artist(id) => ytm::artist(api, id).await?.top,
+                        Target::Artist(id) => self.artist_page(id).await?.top,
                         Target::Song(t) => vec![t.clone()],
                     };
                     Resp::PlayQueue { target, tracks }
@@ -873,24 +873,17 @@ impl Backend {
     }
 
     /// Songs, albums, artists and playlists for a search, asked at once. Only the songs
-    /// must arrive.
+    /// must arrive (no music videos).
     async fn search(&self, query: String, me: bool) -> anyhow::Result<Resp> {
         let api = &*self.api;
-        let (t, v, al, ar, pl) = tokio::join!(
+        let (t, al, ar, pl) = tokio::join!(
             ytm::search_songs(api, &query, me),
-            ytm::search_videos(api, &query, me),
             ytm::search_cards(api, &query, ytm::Filter::Albums, me),
             ytm::search_cards(api, &query, ytm::Filter::Artists, me),
             ytm::search_cards(api, &query, ytm::Filter::Playlists, me),
         );
-        let mut tracks = t.unwrap_or_default();
-        if let Ok(videos) = v {
-            for v_track in videos {
-                if !tracks.iter().any(|existing| existing.id == v_track.id) {
-                    tracks.push(v_track);
-                }
-            }
-        }
+        let mut tracks = t?;
+        tracks.retain(|tr| !tr.music_video);
         Ok(Resp::Search(SearchResults {
             tracks,
             albums: al.unwrap_or_default(),
@@ -900,26 +893,59 @@ impl Backend {
         }))
     }
 
-    /// Load artist page and enrich top songs with soundtrack/compilation tracks (e.g. Heartbeat on Manhunter OST).
-    async fn artist(&self, id: &str) -> anyhow::Result<Resp> {
+    /// Load artist page and enrich top songs with full top playlist and soundtrack/compilation
+    /// tracks (e.g. Heartbeat on Manhunter OST) while keeping YouTube Music's ranked top songs first.
+    async fn artist_page(&self, id: &str) -> anyhow::Result<ArtistPage> {
         let api = &*self.api;
+        let me = api.account().is_some();
         let mut page = ytm::artist(api, id).await?;
-        if let Ok(searched) = ytm::search_songs(api, &page.name, false).await {
-            let mut extra_top = Vec::new();
+        let top_pl_id = page.top_playlist.clone();
+
+        let (full_top, searched) = tokio::join!(
+            async {
+                match top_pl_id.as_deref() {
+                    Some(pl) => ytm::playlist(api, pl, me, None).await.ok(),
+                    None => None,
+                }
+            },
+            ytm::search_songs(api, &page.name, me),
+        );
+
+        let same_title = |a: &str, b: &str| {
+            let clean = |s: &str| s.split(['(', '[']).next().unwrap_or(s).trim().to_lowercase();
+            let ca = clean(a);
+            !ca.is_empty() && ca == clean(b)
+        };
+
+        if let Some(pl) = full_top {
+            for tr in pl.tracks {
+                if !tr.music_video && !page.top.iter().any(|e| e.id == tr.id) {
+                    page.top.push(tr);
+                }
+            }
+        }
+
+        if let Ok(searched) = searched {
             for tr in searched {
+                if tr.music_video {
+                    continue;
+                }
                 let is_this_artist = tr.artists.iter().any(|a| {
                     a.id.as_deref() == Some(&page.id) || a.name.eq_ignore_ascii_case(&page.name)
                 });
-                if is_this_artist && !page.top.iter().any(|existing| existing.id == tr.id) {
-                    extra_top.push(tr);
+                let already = page.top.iter().any(|e| {
+                    e.id == tr.id || (same_title(&e.title, &tr.title) && e.duration.zip(tr.duration).is_none_or(|(a, b)| a.abs_diff(b) <= 5))
+                });
+                if is_this_artist && !already {
+                    page.top.push(tr);
                 }
             }
-            if !extra_top.is_empty() {
-                extra_top.extend(page.top);
-                page.top = extra_top;
-            }
         }
-        Ok(Resp::Artist(page))
+        Ok(page)
+    }
+
+    async fn artist(&self, id: &str) -> anyhow::Result<Resp> {
+        Ok(Resp::Artist(self.artist_page(id).await?))
     }
 
     /// Saved playlists and albums.

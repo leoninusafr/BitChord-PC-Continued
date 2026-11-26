@@ -2,9 +2,9 @@
 ; Generates a clean, modern installer with 1-click complete residue-free uninstall
 
 !define PRODUCT_NAME "BitChord"
-!define PRODUCT_VERSION "2.1.0"
-!define PRODUCT_PUBLISHER "jackychan4891"
-!define PRODUCT_WEB_SITE "https://github.com/jackychan4891/BitChord-PC-Continued"
+!define PRODUCT_VERSION "2.2.1"
+!define PRODUCT_PUBLISHER "leoninusafr"
+!define PRODUCT_WEB_SITE "https://github.com/leoninusafr/BitChord-PC-Continued"
 !define PRODUCT_EXE "bitchord.exe"
 !define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 
@@ -76,6 +76,7 @@ Section "Hauptprogramm" SecMain
 
   ; Install binaries & docs
   File "${BIN_DIR}\${PRODUCT_EXE}"
+  File "${BIN_DIR}\WebView2Loader.dll"
   File "..\README.md"
   File "..\LICENSE"
 
@@ -121,6 +122,7 @@ SectionEnd
 Section "Uninstall"
   ; 1. Delete installed files
   Delete "$INSTDIR\${PRODUCT_EXE}"
+  Delete "$INSTDIR\WebView2Loader.dll"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\uninstall.exe"

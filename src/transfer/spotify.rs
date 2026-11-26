@@ -31,7 +31,7 @@ const PAGE: usize = 343;
 const LIBRARY_PAGE: usize = 50;
 const CDN: &str = "https://open.spotifycdn.com/cdn/build/web-player/";
 /// The persisted queries this reads, found in the web player's bundle.
-const OPERATIONS: [&str; 4] = ["fetchPlaylist", "fetchLibraryTracks", "libraryV3", "profileAttributes"];
+const OPERATIONS: [&str; 5] = ["fetchPlaylist", "fetchLibraryTracks", "libraryV3", "profileAttributes", "searchDesktop"];
 /// Where the query hashes are cached, so a new bundle (several MB) is read once per web-player release.
 const HASH_CACHE: &str = "spotify_queries.json";
 
@@ -392,24 +392,16 @@ impl Client {
     pub async fn sync_like(&self, title: &str, artist: &str, like: bool) -> Result<()> {
         let clean_title = title.split(['(', '[']).next().unwrap_or(title).trim();
         let queries = [
-            if artist.is_empty() { clean_title.to_owned() } else { format!("track:\"{}\" artist:\"{}\"", clean_title, artist) },
             if artist.is_empty() { clean_title.to_owned() } else { format!("{} {}", clean_title, artist) },
             format!("{} {}", title, artist),
         ];
 
-        let search_url = "https://api.spotify.com/v1/search";
         let mut track_id = None;
-
-        for q in queries {
-            let req = self.http.get(search_url)
-                .bearer_auth(&self.access_token)
-                .query(&[("q", &q), ("type", &"track".to_string()), ("limit", &"1".to_string())]);
-            if let Ok(resp) = req.send().await.and_then(|r| r.error_for_status()) {
-                if let Ok(res) = resp.json::<Value>().await {
-                    if let Some(id) = res["tracks"]["items"][0]["id"].as_str() {
-                        track_id = Some(id.to_owned());
-                        break;
-                    }
+        for q in &queries {
+            if let Ok((tracks, _)) = self.search_desktop_with_uris(q, 5).await {
+                if let Some((id, _)) = tracks.into_iter().next() {
+                    track_id = Some(id);
+                    break;
                 }
             }
         }
@@ -426,84 +418,83 @@ impl Client {
         Ok(())
     }
 
-    /// Search Spotify tracks by query string.
-    pub async fn search_tracks(&self, query: &str, limit: usize) -> Result<Vec<Track>> {
-        let search_url = "https://api.spotify.com/v1/search";
-        let limit_str = limit.to_string();
-        let resp = self.http.get(search_url)
-            .bearer_auth(&self.access_token)
-            .query(&[("q", query), ("type", "track"), ("limit", &limit_str)])
-            .send()
-            .await?
-            .error_for_status()?;
-        let res: Value = resp.json().await?;
+    async fn search_desktop_with_uris(&self, query: &str, limit: usize) -> Result<(Vec<(String, Track)>, Vec<Entry>)> {
+        let variables = json!({
+            "searchTerm": query,
+            "offset": 0,
+            "limit": limit,
+            "numberOfTopResults": limit.min(5),
+            "includeAudiobooks": false,
+            "includeArtistHasConcertsField": false,
+            "includePreReleases": false,
+            "includeLocalConcertsField": false,
+        });
+        let res = self.query("searchDesktop", variables).await?;
+
         let mut tracks = Vec::new();
-        if let Some(items) = res["tracks"]["items"].as_array() {
+        if let Some(items) = res["data"]["searchV2"]["tracksV2"]["items"].as_array() {
             for item in items {
-                let name = item["name"].as_str().unwrap_or_default().to_string();
-                let artists: Vec<String> = item["artists"]
+                let d = &item["item"]["data"];
+                let name = d["name"].as_str().unwrap_or_default().to_string();
+                let id = d["uri"].as_str().and_then(|u| u.strip_prefix("spotify:track:")).unwrap_or_default().to_string();
+                let artists: Vec<String> = d["artists"]["items"]
                     .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|a| a["name"].as_str().map(String::from))
-                            .collect()
-                    })
+                    .map(|arr| arr.iter().filter_map(|a| a["profile"]["name"].as_str().map(String::from)).collect())
                     .unwrap_or_default();
-                let art = item["album"]["images"]
+                let art = d["albumOfTrack"]["coverArt"]["sources"]
                     .as_array()
-                    .and_then(|imgs| imgs.first())
+                    .and_then(|imgs| imgs.iter().find(|s| s["width"].as_u64() == Some(300)).or_else(|| imgs.first()))
                     .and_then(|img| img["url"].as_str())
                     .map(String::from);
-                let duration = item["duration_ms"].as_u64().map(|ms| ((ms + 500) / 1000) as u32);
+                let duration = d["duration"]["totalMilliseconds"].as_u64().map(|ms| ((ms + 500) / 1000) as u32);
                 if !name.is_empty() && !artists.is_empty() {
-                    tracks.push(Track {
-                        name,
-                        artists,
-                        local: false,
-                        art,
-                        duration,
-                    });
+                    tracks.push((
+                        id,
+                        Track {
+                            name,
+                            artists,
+                            local: false,
+                            art,
+                            duration,
+                        },
+                    ));
                 }
             }
         }
-        Ok(tracks)
-    }
 
-    /// Search Spotify playlists by query string.
-    pub async fn search_playlists(&self, query: &str, limit: usize) -> Result<Vec<Entry>> {
-        let search_url = "https://api.spotify.com/v1/search";
-        let limit_str = limit.to_string();
-        let resp = self.http.get(search_url)
-            .bearer_auth(&self.access_token)
-            .query(&[("q", query), ("type", "playlist"), ("limit", &limit_str)])
-            .send()
-            .await?
-            .error_for_status()?;
-        let res: Value = resp.json().await?;
         let mut pls = Vec::new();
-        if let Some(items) = res["playlists"]["items"].as_array() {
+        if let Some(items) = res["data"]["searchV2"]["playlists"]["items"].as_array() {
             for item in items {
-                let id = item["id"].as_str().unwrap_or_default().to_string();
-                let name = item["name"].as_str().unwrap_or_default().to_string();
-                let owner = item["owner"]["display_name"].as_str().unwrap_or_default().to_string();
-                let count = item["tracks"]["total"].as_u64().map(|c| c as usize);
-                let art = item["images"]
+                let d = &item["data"];
+                let id = d["uri"].as_str().and_then(|u| u.strip_prefix("spotify:playlist:")).unwrap_or_default().to_string();
+                let name = d["name"].as_str().unwrap_or_default().to_string();
+                let owner = d["ownerV2"]["data"]["name"].as_str().unwrap_or_default().to_string();
+                let art = d["images"]["items"]
                     .as_array()
                     .and_then(|imgs| imgs.first())
-                    .and_then(|img| img["url"].as_str())
+                    .and_then(|img| img["sources"].as_array())
+                    .and_then(|srcs| srcs.first())
+                    .and_then(|s| s["url"].as_str())
                     .map(String::from);
                 if !id.is_empty() && !name.is_empty() {
                     pls.push(Entry {
                         source: Source::Playlist(id),
                         name,
                         owner,
-                        count,
+                        count: None,
                         art,
                     });
                 }
             }
         }
-        Ok(pls)
+
+        Ok((tracks, pls))
+    }
+
+    /// Search Spotify tracks and playlists via the web-player `searchDesktop` GraphQL API.
+    pub async fn search_desktop(&self, query: &str, limit: usize) -> Result<(Vec<Track>, Vec<Entry>)> {
+        let (tracks_with_ids, pls) = self.search_desktop_with_uris(query, limit).await?;
+        Ok((tracks_with_ids.into_iter().map(|(_, t)| t).collect(), pls))
     }
 
     /// Spotify Friend Activity feed: reads who is listening to what.
@@ -788,19 +779,44 @@ fn extract_bundle_secret(js: &str) -> Option<(u32, Vec<u8>)> {
     let mut best: Option<(u32, Vec<u8>)> = None;
     for part in js.split("secret:") {
         let part = part.trim_start();
-        let Some(quote) = part.chars().next() else { continue };
+        let mut chars = part.chars();
+        let Some(quote) = chars.next() else { continue };
         if quote != '\'' && quote != '"' {
             continue;
         }
-        let after_quote = &part[1..];
-        let Some(end_quote) = after_quote.find(quote) else { continue };
-        let secret_str = &after_quote[..end_quote];
-        let rest = &after_quote[end_quote + 1..];
-        if let Some(v_idx) = rest.find("version:") {
-            let num_str: String = rest[v_idx + 8..].chars().take_while(|c| c.is_ascii_digit()).collect();
+        let mut secret_str = String::new();
+        let mut escaped = false;
+        let mut closed_byte_offset = None;
+        for (idx, c) in chars.as_str().char_indices() {
+            if escaped {
+                match c {
+                    '\\' => secret_str.push('\\'),
+                    '\'' => secret_str.push('\''),
+                    '"' => secret_str.push('"'),
+                    'n' => secret_str.push('\n'),
+                    'r' => secret_str.push('\r'),
+                    't' => secret_str.push('\t'),
+                    other => secret_str.push(other),
+                }
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == quote {
+                closed_byte_offset = Some(1 + idx + c.len_utf8());
+                break;
+            } else {
+                secret_str.push(c);
+            }
+        }
+        let Some(offset) = closed_byte_offset else { continue };
+        let rest = &part[offset..];
+        let obj_end = rest.find('}').unwrap_or(rest.len().min(64));
+        let obj_tail = &rest[..obj_end];
+        if let Some(v_idx) = obj_tail.find("version:") {
+            let num_str: String = obj_tail[v_idx + 8..].trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
             if let Ok(ver) = num_str.parse::<u32>() {
-                if best.as_ref().is_none_or(|(b_ver, _)| ver > *b_ver) {
-                    best = Some((ver, secret_str.as_bytes().to_vec()));
+                if !secret_str.is_empty() && best.as_ref().is_none_or(|(b_ver, _)| ver > *b_ver) {
+                    best = Some((ver, secret_str.into_bytes()));
                 }
             }
         }
@@ -846,7 +862,7 @@ async fn query_hashes(http: &reqwest::Client, bundle: &str, data_dir: &Path) -> 
     let cache = data_dir.join(HASH_CACHE);
     if let Some(h) = std::fs::read(&cache).ok().and_then(|b| serde_json::from_slice::<Hashes>(&b).ok())
         && h.bundle == bundle
-        && h.ops.contains_key("fetchPlaylist")
+        && OPERATIONS.iter().all(|op| h.ops.contains_key(*op))
     {
         return Ok(h);
     }
@@ -954,6 +970,19 @@ mod tests {
     fn id_maps() {
         let js = r#"x={1:"a",2:"b"};y={1:"0123abcd",2:"deadbeef"};"#;
         assert_eq!(chunk_urls(js), vec![format!("{CDN}a.0123abcd.js"), format!("{CDN}b.deadbeef.js")]);
+    }
+
+    #[test]
+    fn bundle_secret_unescapes_and_picks_highest_version() {
+        let js = r#"let ej=[{secret:',7/*F("rLJ2oxaKL^f+E1xvP@N',version:61},{secret:'OmE{ZA.J^":0FG\\Uz?[@WW',version:60},{secret:'fake',other:1},version:999];"#;
+        let (ver, secret) = extract_bundle_secret(js).unwrap();
+        assert_eq!(ver, 61);
+        assert_eq!(secret, b",7/*F(\"rLJ2oxaKL^f+E1xvP@N");
+
+        let escaped_only = r#"[{secret:'a\'b\\c',version:62}]"#;
+        let (ver2, secret2) = extract_bundle_secret(escaped_only).unwrap();
+        assert_eq!(ver2, 62);
+        assert_eq!(secret2, b"a'b\\c");
     }
 
     /// Live: reads a public playlist anonymously (`cargo test -- --ignored spotify_live`).
