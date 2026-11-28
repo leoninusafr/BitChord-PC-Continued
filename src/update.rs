@@ -69,8 +69,10 @@ pub fn installed() -> bool {
     if cfg!(target_os = "macos") {
         return bundle_of(&exe).is_some() && portable_dir().is_none();
     }
-    let marker = if cfg!(windows) { "unins000.exe" } else { "install.txt" };
-    exe.parent().is_some_and(|d| d.join(marker).exists())
+    if cfg!(windows) {
+        return exe.parent().is_some_and(|d| d.join("uninstall.exe").exists() || d.join("unins000.exe").exists());
+    }
+    exe.parent().is_some_and(|d| d.join("install.txt").exists())
 }
 
 /// The `.app` bundle a binary is in (`X.app/Contents/MacOS/bitchord`).
@@ -96,8 +98,10 @@ fn asset_name(version: &str) -> String {
     let suffix = if cfg!(target_arch = "aarch64") { "-arm64" } else { "" };
     if portable {
         format!("bitchord-v{version}{suffix}-portable.zip")
-    } else {
+    } else if installed() {
         format!("bitchord-setup-{version}{suffix}.exe")
+    } else {
+        "bitchord.exe".to_owned()
     }
 }
 
@@ -228,6 +232,14 @@ impl Updater {
         None
     }
 
+    /// Force a fresh update check (resets UpToDate/Failed state first).
+    pub fn force_check(&self) {
+        if matches!(self.state(), State::UpToDate | State::Failed(_)) {
+            self.set(State::Idle);
+        }
+        self.check();
+    }
+
     /// Check for a newer release and download it, in the background.
     pub fn check(&self) {
         if matches!(self.state(), State::Checking | State::Downloading { .. } | State::Ready { .. }) {
@@ -275,7 +287,8 @@ impl Updater {
         let url = asset["browser_download_url"].as_str().ok_or_else(|| anyhow::anyhow!("asset has no URL"))?;
         let size = asset["size"].as_u64().unwrap_or(0);
         std::fs::create_dir_all(&self.dir)?;
-        let path = self.dir.join(&want);
+        let local_name = if want == "bitchord.exe" { format!("bitchord-{version}.exe") } else { want.clone() };
+        let path = self.dir.join(&local_name);
         if std::fs::metadata(&path).map(|m| m.len()).ok() != Some(size) || size == 0 {
             log::info!("update: downloading {version} ({size} bytes)");
             self.set(State::Downloading { version: version.clone(), percent: 0 });
@@ -313,7 +326,7 @@ impl Updater {
         let unpacked = self.dir.join(format!("ytm-rs-{version}"));
         let ready = if cfg!(target_os = "macos") && !portable {
             open_dmg(&path, &unpacked)?
-        } else if portable || cfg!(unix) {
+        } else if (portable || cfg!(unix)) && want != "bitchord.exe" {
             unzip_exe(&path, &unpacked)?
         } else {
             path
@@ -339,18 +352,27 @@ impl Updater {
 
     #[cfg(windows)]
     fn run_installer(&self, installer: &Path, exe: &Path, relaunch: bool) {
-        if portable_dir().is_some() {
+        if portable_dir().is_some() || !installed() {
             return swap_exe(installer, exe, relaunch);
         }
-        // Update the copy that's running: an all-users install lives under Program Files
-        // (and the installer will ask for admin rights); otherwise it's per-user.
-        let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
-        let scope = if program_files.is_some_and(|p| exe.starts_with(p)) { "/ALLUSERS" } else { "/CURRENTUSER" };
+        let is_nsis = exe.parent().is_some_and(|d| d.join("uninstall.exe").exists());
         // Give this process a moment to save and exit before the installer replaces it.
-        let mut script = format!(
-            "ping -n 3 127.0.0.1 >NUL & \"{}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART {scope}",
-            installer.display()
-        );
+        let mut script = if is_nsis {
+            let dir_arg = exe
+                .parent()
+                .map(|d| d.to_string_lossy().into_owned())
+                .filter(|d| !d.contains('&'))
+                .map_or_else(String::new, |d| format!(" /D={d}"));
+            format!("ping -n 3 127.0.0.1 >NUL & \"{}\" /S{dir_arg}", installer.display())
+        } else {
+            // Legacy Inno Setup path: update the copy that's running.
+            let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
+            let scope = if program_files.is_some_and(|p| exe.starts_with(p)) { "/ALLUSERS" } else { "/CURRENTUSER" };
+            format!(
+                "ping -n 3 127.0.0.1 >NUL & \"{}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART {scope}",
+                installer.display()
+            )
+        };
         if relaunch {
             script += &format!(" & start \"\" \"{}\" {}", exe.display(), crate::deeplink::RELAUNCH_FLAG);
         }
@@ -363,8 +385,8 @@ impl Updater {
     }
 }
 
-/// The portable update: Windows lets a running exe be renamed, so move this one aside
-/// and put the new one in its place (the next launch deletes the old one).
+/// The portable / standalone update: Windows lets a running exe be renamed, so move this
+/// one aside and put the new one in its place (the next launch deletes the old one).
 #[cfg(windows)]
 fn swap_exe(new: &Path, exe: &Path, relaunch: bool) {
     let old = exe.with_extension("exe.old");
@@ -380,6 +402,13 @@ fn swap_exe(new: &Path, exe: &Path, relaunch: bool) {
         log::warn!("update: couldn't copy the new version: {e}");
         let _ = std::fs::rename(&old, exe);
         return;
+    }
+    // Keep WebView2Loader.dll beside exe in sync when unpacked from a portable zip.
+    if let (Some(src_dir), Some(dst_dir)) = (new.parent(), exe.parent()) {
+        let src_dll = src_dir.join("WebView2Loader.dll");
+        if src_dll.is_file() {
+            let _ = std::fs::copy(&src_dll, dst_dir.join("WebView2Loader.dll"));
+        }
     }
     log::info!("update: replaced {}", exe.display());
     if relaunch {

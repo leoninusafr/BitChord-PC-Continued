@@ -456,7 +456,7 @@ fn source_row(app: &mut App, ui: &mut Ui, e: &Entry, selected: bool, accent: Col
 fn spotify_account_row(app: &mut App, ui: &mut Ui, account: &Account, compact: bool) {
     let xfer = app.transfer.clone();
     let busy = xfer.signing_in.load(Ordering::Relaxed);
-    let (mut sign_in, mut sign_out) = (false, false);
+    let (mut sign_in, mut sign_out, mut retry) = (false, false, false);
     let (title, desc) = match account {
         Account::SignedIn { name, .. } if compact => (
             if name.is_empty() { "Signed in".to_owned() } else { name.clone() },
@@ -466,23 +466,30 @@ fn spotify_account_row(app: &mut App, ui: &mut Ui, account: &Account, compact: b
             let who = if name.is_empty() { "Signed in".to_owned() } else { format!("Signed in as {name}") };
             ("Spotify account".to_owned(), format!("{who}. Saved encrypted in Windows Credential Manager."))
         }
-        Account::Unknown | Account::Loading => ("Spotify account".to_owned(), "Checking your sign-in…".to_owned()),
+        Account::Unknown | Account::Loading => ("Spotify account".to_owned(), "Connecting to Spotify…".to_owned()),
         Account::SignedOut if compact => ("Not signed in".to_owned(), "Needed for Liked Songs and private playlists. Public playlists work without it.".to_owned()),
         Account::SignedOut => ("Spotify account".to_owned(), "Not signed in. Needed for Liked Songs and private playlists; public playlists work without it.".to_owned()),
         Account::Failed(e) => ("Spotify account".to_owned(), e.clone()),
     };
     let signed_in = matches!(account, Account::SignedIn { .. } | Account::Unknown | Account::Loading);
+    let has_saved_cookie = matches!(account, Account::Failed(_)) && xfer.cookie().is_some();
     setting_row(ui, &title, Some(&desc), |ui| {
         if busy {
             ui.spinner();
         } else if signed_in {
             sign_out = pill(ui, if compact { "Change" } else { "Sign out" }, None, false).clicked();
         } else {
+            if has_saved_cookie {
+                retry = pill(ui, "Retry", Some(icon::ROTATE_CW), false).clicked();
+            }
             sign_in = pill(ui, "Sign in to Spotify", None, true).clicked();
         }
     });
     if busy {
         dim(ui, "Finish signing in in the window that opened.");
+    }
+    if retry {
+        xfer.retry_account(&app.backend);
     }
     if sign_out {
         xfer.set_cookie(None, &app.backend);

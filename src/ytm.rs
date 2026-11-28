@@ -78,6 +78,60 @@ pub async fn search_songs(api: &Api, query: &str, auth: bool) -> anyhow::Result<
     Ok(search_as(api, query, Filter::Songs, auth).await?.iter().filter_map(|i| list_item(&i["musicResponsiveListItemRenderer"])).collect())
 }
 
+/// Unfiltered search (includes YouTube Music's spell-corrected top result and mixed song shelves).
+pub async fn search_all(api: &Api, query: &str, auth: bool) -> anyhow::Result<Vec<Track>> {
+    let v = api.call("search", json!({ "query": query }), auth).await?;
+    let sections = &v["contents"]["tabbedSearchResultsRenderer"]["tabs"][0]["tabRenderer"]["content"]["sectionListRenderer"]["contents"];
+    let mut tracks = Vec::new();
+    for sec in arr(sections) {
+        if let Some(card) = sec.get("musicCardShelfRenderer") {
+            let nav = &card["onTap"];
+            if let Some(id) = nav["watchEndpoint"]["videoId"].as_str()
+                && let Some(title) = text(&card["title"])
+            {
+                let sub = card["subtitle"].clone();
+                let mut artists = Vec::new();
+                for run in runs(&sub) {
+                    if page_type(run).is_some_and(|k| k == "MUSIC_PAGE_TYPE_ARTIST" || k == "MUSIC_PAGE_TYPE_USER_CHANNEL")
+                        && let Some(n) = run["text"].as_str()
+                    {
+                        artists.push(Link { name: n.to_owned(), id: browse_id(run) });
+                    }
+                }
+                let mv = music_video(&[nav, &card["title"]]);
+                if !mv && !id.is_empty() && !title.is_empty() {
+                    tracks.push(Track {
+                        id: id.to_owned(),
+                        title,
+                        artists,
+                        album: None,
+                        duration: None,
+                        thumbs: thumbs(&card["thumbnail"]["musicThumbnailRenderer"]),
+                        track_nr: None,
+                        plays: None,
+                        music_video: false,
+                    });
+                }
+            }
+            for item in arr(&card["contents"]) {
+                if let Some(tr) = list_item(&item["musicResponsiveListItemRenderer"])
+                    && !tr.music_video
+                {
+                    tracks.push(tr);
+                }
+            }
+        }
+        for item in arr(&sec["musicShelfRenderer"]["contents"]) {
+            if let Some(tr) = list_item(&item["musicResponsiveListItemRenderer"])
+                && !tr.music_video
+            {
+                tracks.push(tr);
+            }
+        }
+    }
+    Ok(tracks)
+}
+
 /// Video rows, searched either signed out or as the signed-in account.
 pub async fn search_videos(api: &Api, query: &str, auth: bool) -> anyhow::Result<Vec<Track>> {
     Ok(search_as(api, query, Filter::Videos, auth).await?.iter().filter_map(|i| list_item(&i["musicResponsiveListItemRenderer"])).collect())

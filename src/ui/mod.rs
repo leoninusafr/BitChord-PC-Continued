@@ -44,6 +44,7 @@ use crate::backend::{ArtistPage, Backend, Explore, Library, Req, Resp, SearchRes
 use crate::lyrics::LyricsSet;
 use crate::media::Media;
 use crate::model::{Card, Chip, Shelf, Target, Track};
+use crate::glass::LiquidGlass;
 use crate::shader::Background;
 use crate::theme;
 use lists::{LIKED_MUSIC, Lists};
@@ -345,6 +346,7 @@ pub struct App {
     /// an album's or artist's songs (`Req::PlayCollection`).
     play_pending: Option<(Target, bool)>,
     bg: Option<Background>,
+    pub(super) glass: Option<LiquidGlass>,
 
     // navigation
     page: Page,
@@ -477,6 +479,7 @@ pub struct App {
     appearance: theme::Appearance,
     anim_bg: bool,
     reactive_bg: bool,
+    pub(super) liquid_glass: bool,
     pub(super) cover_glow: bool,
     /// Skip the parts of music videos SponsorBlock marks as not music.
     sponsorblock: bool,
@@ -485,6 +488,10 @@ pub struct App {
     /// DJ-style handoff: the next song eases in under the last one (see `audio::Ramp`).
     automix: bool,
     crossfade_secs: u32,
+    /// The equalizer: whether it's on, its bands (dB) and whether it keeps clear of clipping.
+    eq_on: bool,
+    eq_gains: crate::audio::eq::Gains,
+    eq_no_clip: bool,
     /// The next song starts because this one is ending: crossfade into it.
     handoff: bool,
     /// The handoff just begun, for the play that starts the next song to pick up.
@@ -647,6 +654,7 @@ impl App {
         ch: Channels,
         media: Option<Media>,
         bg: Option<Background>,
+        glass: Option<LiquidGlass>,
         storage: Option<&dyn eframe::Storage>,
     ) -> Self {
         let get = |k: &str| storage.and_then(|s| s.get_string(k));
@@ -699,6 +707,7 @@ impl App {
             queue_source: None,
             play_pending: None,
             bg,
+            glass,
             page: Page::Home,
             back: Vec::new(),
             forward: Vec::new(),
@@ -817,6 +826,7 @@ impl App {
             appearance: theme::Appearance::from_key(&dev_var("YTM_APPEARANCE").map(str::to_owned).or_else(|| get("appearance")).unwrap_or_default()),
             anim_bg: get("anim_bg").is_none_or(|v| v == "1"),
             reactive_bg: get("reactive_bg").is_none_or(|v| v == "1"),
+            liquid_glass: get("liquid_glass").is_none_or(|v| v == "1"),
             cover_glow: get("cover_glow").is_some_and(|v| v == "1"),
             sponsorblock: get("sponsorblock").is_some_and(|v| v == "1"),
             crossfade: get("crossfade").is_some_and(|v| v == "1"),
@@ -825,6 +835,9 @@ impl App {
             pending_mix: None,
             mix_from: None,
             crossfade_secs: get("crossfade_secs").and_then(|v| v.parse().ok()).unwrap_or(5).clamp(1, CROSSFADE_MAX),
+            eq_on: get("eq").is_some_and(|v| v == "1"),
+            eq_gains: get("eq_gains").and_then(|v| parse_gains(&v)).unwrap_or_default(),
+            eq_no_clip: get("eq_no_clip").is_none_or(|v| v == "1"),
             segments: None,
             segment_skipped: f64::NEG_INFINITY,
             bg_time: 0.0,
@@ -844,7 +857,7 @@ impl App {
             details_width: 270.0,
             sidebar_width: 250.0,
             followed_artists: Default::default(),
-            spotify_two_way_sync: false,
+            spotify_two_way_sync: get("spotify_two_way_sync").is_some_and(|v| v == "1"),
             two_way_syncing: false,
             friend_activity: Vec::new(),
             friend_activity_loading: false,
@@ -945,6 +958,8 @@ impl App {
         jam::dev_hooks(&mut app);
         app.audio.set_normalize(app.normalize);
         app.set_crossfade();
+        app.set_eq();
+        app.transfer.ensure_account(&app.backend);
         app
     }
 
@@ -1927,6 +1942,7 @@ impl eframe::App for App {
         }
         storage.set_string("anim_bg", b(self.anim_bg));
         storage.set_string("reactive_bg", b(self.reactive_bg));
+        storage.set_string("liquid_glass", b(self.liquid_glass));
         storage.set_string("cover_glow", b(self.cover_glow));
         storage.set_string("signature_api", self.signature_api.clone());
         storage.set_string("hires_source", self.hires_sources.join("\n"));
@@ -1935,6 +1951,10 @@ impl eframe::App for App {
         storage.set_string("crossfade", b(self.crossfade));
         storage.set_string("automix", b(self.automix));
         storage.set_string("crossfade_secs", self.crossfade_secs.to_string());
+        storage.set_string("eq", b(self.eq_on));
+        storage.set_string("eq_gains", self.eq_gains.map(|g| g.to_string()).join(","));
+        storage.set_string("eq_no_clip", b(self.eq_no_clip));
+        storage.set_string("spotify_two_way_sync", b(self.spotify_two_way_sync));
         storage.set_string("show_roman", b(self.show_roman));
         storage.set_string("show_trans", b(self.show_trans));
         storage.set_string("blocked_tracks", serde_json::to_string(&self.blocked_tracks).unwrap_or_default());
@@ -1955,6 +1975,9 @@ impl eframe::App for App {
         if let (Some(bg), Some(gl)) = (&self.bg, gl) {
             bg.destroy(gl);
         }
+        if let (Some(glass), Some(gl)) = (&self.glass, gl) {
+            glass.destroy(gl);
+        }
         // A downloaded update installs only when the user restarted for it; nothing is
         // installed behind their back as the app closes.
         let update_ready = self.updater.as_ref().is_some_and(|u| matches!(u.state(), crate::update::State::Ready { .. }));
@@ -1970,6 +1993,15 @@ impl eframe::App for App {
 }
 
 const SESSION_KEY: &str = "session";
+
+fn parse_gains(s: &str) -> Option<crate::audio::eq::Gains> {
+    let mut out = [0.0; 10];
+    let mut parts = s.split(',');
+    for g in &mut out {
+        *g = parts.next()?.trim().parse::<f32>().ok().filter(|v| v.is_finite())?.clamp(-crate::audio::eq::MAX_DB, crate::audio::eq::MAX_DB);
+    }
+    parts.next().is_none().then_some(out)
+}
 
 /// Start this exe again once this process has saved and exited.
 fn relaunch() {
@@ -2110,7 +2142,7 @@ pub fn shuffle<T>(v: &mut [T]) {
 /// can't change while running, and the check touches the disk, so it runs once.
 fn updatable() -> bool {
     static UPDATABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *UPDATABLE.get_or_init(|| crate::update::installed() || crate::update::portable_dir().is_some())
+    *UPDATABLE.get_or_init(|| cfg!(windows) || crate::update::installed() || crate::update::portable_dir().is_some())
 }
 
 pub fn fmt_time(secs: u32) -> String {

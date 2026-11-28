@@ -16,6 +16,11 @@ use crate::stream::{self, Shared};
 
 pub use crate::stream::TrackDecoder;
 
+#[path = "audio/eq.rs"]
+pub mod eq;
+#[path = "audio/limiter.rs"]
+pub mod limiter;
+
 pub enum AudioCmd {
     /// A decoder is ready for playback generation `generation`; stale generations are dropped.
     /// A decoder started mid-song (`at` > 0) is the seekable kind.
@@ -68,8 +73,10 @@ pub struct AudioStatus {
     pub wanted_gen: AtomicU64,
     /// f32 bits
     volume: AtomicU32,
-    /// Turn loud tracks down to YouTube's loudness target.
+    /// Turn loud tracks down and quiet tracks up to -14 LUFS target, with limiter.
     pub normalize: AtomicBool,
+    /// Peak limiter active when normalization raises quiet songs.
+    limit: Arc<AtomicBool>,
     /// The volume slider follows loudness (cubic) rather than amplitude.
     log_volume: AtomicBool,
     /// Smoothed output loudness 0..1 (f32 bits), for audio-reactive visuals.
@@ -78,6 +85,8 @@ pub struct AudioStatus {
     latency_ms: AtomicU32,
     /// Crossfade length in ms; 0 = off.
     crossfade_ms: AtomicU32,
+    /// 10-band equalizer parameters.
+    eq: Arc<eq::EqParams>,
     /// DJ-style handoff rather than a straight-line crossfade (see `Ramp`).
     automix: AtomicBool,
     /// Tempo estimate of the playing song in BPM (f32 bits); 0 until one is heard.
@@ -540,7 +549,13 @@ impl AudioHandle {
 
     pub fn set_normalize(&self, on: bool) {
         self.status.normalize.store(on, Ordering::Relaxed);
+        self.status.limit.store(on, Ordering::Relaxed);
         self.send(AudioCmd::Volume(self.volume()));
+    }
+
+    /// Takes effect at once, gliding smoothly without clicks.
+    pub fn set_eq(&self, on: bool, gains: &eq::Gains, no_clip: bool) {
+        self.status.eq.set(on, gains, no_clip);
     }
 
     /// Switches the slider's curve, moving it so the music stays as loud as it was.
@@ -683,8 +698,11 @@ fn slider_gain(status: &AudioStatus, v: f32) -> f32 {
 }
 
 fn norm_gain(status: &AudioStatus, shared: Option<&Shared>) -> f32 {
+    if !status.normalize.load(Ordering::Relaxed) {
+        return 1.0;
+    }
     match shared.and_then(|s| s.loudness_db) {
-        Some(db) if db > 0.0 && status.normalize.load(Ordering::Relaxed) => 10f32.powf(-db / 20.0),
+        Some(db) if db.is_finite() => 10f32.powf((-db).clamp(-24.0, 6.0) / 20.0),
         _ => 1.0,
     }
 }
@@ -761,15 +779,18 @@ impl Output {
         let mut sink = sink;
         sink.log_on_drop(false);
         let channels = rodio::Source::channels(&source).get();
-        sink.mixer().add(Bridge { inner: Some(source), slot: self.slot.clone(), channels, n: 0 });
+        let rate = rodio::Source::sample_rate(&source).get();
+        let eq = eq::Eq::new(status.eq.clone(), rate, channels);
+        let limiter = limiter::Limiter::new(status.limit.clone(), rate, channels);
+        sink.mixer().add(Bridge { inner: Some(source), slot: self.slot.clone(), channels, n: 0, eq, limiter });
         // The position counts samples handed to the device; it plays them a buffer later
-        // (rodio asks for ~50 ms), plus the shared-mode device period (~10 ms).
+        // (rodio asks for ~50 ms), plus the shared-mode device period (~10 ms) and limiter lookahead.
         let rate = sink.config().sample_rate().get().max(1);
         let buffer_ms = match sink.config().buffer_size() {
             rodio::cpal::BufferSize::Fixed(n) => *n as u64 * 1000 / rate as u64,
             rodio::cpal::BufferSize::Default => 0,
         };
-        status.latency_ms.store((buffer_ms + 10) as u32, Ordering::Relaxed);
+        status.latency_ms.store((buffer_ms + 10) as u32 + limiter::LOOKAHEAD_MS, Ordering::Relaxed);
         log::info!("audio: output device {:?} at {} Hz", id, rate);
         self.sink = Some(sink);
         self.device = id;
@@ -829,13 +850,17 @@ struct Bridge {
     /// Samples handed out, to give the mixer back on a frame boundary (else the next
     /// device would get the channels swapped).
     n: u64,
+    eq: eq::Eq,
+    limiter: limiter::Limiter,
 }
 
 impl Iterator for Bridge {
     type Item = rodio::Sample;
     fn next(&mut self) -> Option<Self::Item> {
+        let channel = (self.n % self.channels.max(1) as u64) as usize;
         self.n += 1;
-        Some(self.inner.as_mut().and_then(Iterator::next).unwrap_or(0.0))
+        let s = self.inner.as_mut().and_then(Iterator::next).unwrap_or(0.0);
+        Some(self.limiter.process(self.eq.process(s, channel), channel))
     }
 }
 

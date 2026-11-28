@@ -339,8 +339,9 @@ impl Transfer {
             *account = match res {
                 Ok(a) => Account::SignedIn { name: a.name, library: a.library },
                 Err(e) if e.is::<spotify::SignedOut>() => {
-                    crate::vault::delete(VAULT, &this.data_dir);
-                    crate::login::forget(&this.spotify_profile());
+                    // Keep the saved sp_dc so a temporary Spotify hiccup can be retried
+                    // without forcing a full re-login; explicit sign-out clears the vault.
+                    log::warn!("spotify sign-in rejected: {e:#}");
                     Account::Failed(e.to_string())
                 }
                 Err(e) => {
@@ -358,6 +359,12 @@ impl Transfer {
         if matches!(*self.account.lock().unwrap(), Account::Unknown) {
             self.load_account(rt);
         }
+    }
+
+    /// Retry reading the Spotify account without discarding saved credentials.
+    pub fn retry_account(self: &Arc<Self>, rt: &crate::backend::Backend) {
+        *self.spotify_client.lock().unwrap() = None;
+        self.load_account(rt);
     }
 
     /// Look up a pasted playlist link (once per link), so the page can show what it is.
@@ -386,7 +393,7 @@ impl Transfer {
         rt.spawn(async move {
             let res = async {
                 let Source::Playlist(id) = Source::parse(&link)? else { unreachable!() };
-                let client = spotify::Client::connect(this.cookie().as_deref(), &this.data_dir).await?;
+                let client = this.spotify_search_client(false).await?;
                 client.playlist_info(&id).await
             }
             .await
@@ -410,8 +417,10 @@ impl Transfer {
         let this = self.clone();
         rt.spawn(async move {
             let res = async {
-                let cookie = this.cookie();
-                let client = spotify::Client::connect(cookie.as_deref(), &this.data_dir).await?;
+                let client = match source {
+                    Source::Liked => this.spotify_client().await?,
+                    Source::Playlist(_) => this.spotify_search_client(false).await?,
+                };
                 match &source {
                     Source::Playlist(id) => client.playlist(id, |_, _| {}).await,
                     Source::Liked => client.liked(|_, _| {}).await,
@@ -426,9 +435,13 @@ impl Transfer {
 
     /// Two-way sync: likes or unlikes track in Spotify if user is connected to Spotify.
     pub async fn sync_like_to_spotify(&self, title: &str, artist: &str, like: bool) {
-        let cookie = self.cookie();
-        if let Ok(client) = spotify::Client::connect(cookie.as_deref(), &self.data_dir).await {
-            let _ = client.sync_like(title, artist, like).await;
+        if let Ok(client) = self.spotify_client().await {
+            if client.sync_like(title, artist, like).await.is_err() {
+                *self.spotify_client.lock().unwrap() = None;
+                if let Ok(fresh) = self.spotify_client().await {
+                    let _ = fresh.sync_like(title, artist, like).await;
+                }
+            }
         }
     }
 
@@ -516,8 +529,8 @@ impl Transfer {
         let cookie = self.cookie().ok_or_else(|| anyhow::anyhow!("Not signed in to Spotify"))?;
         {
             let guard = self.spotify_client.lock().unwrap();
-            if let Some((created, client)) = guard.as_ref() {
-                if created.elapsed() < Duration::from_secs(45 * 60) {
+            if let Some((_, client)) = guard.as_ref() {
+                if !client.is_expired() {
                     return Ok(client.clone());
                 }
             }
@@ -562,8 +575,8 @@ impl Transfer {
         }
         {
             let guard = self.anon_spotify_client.lock().unwrap();
-            if let Some((created, client)) = guard.as_ref()
-                && created.elapsed() < Duration::from_secs(45 * 60)
+            if let Some((_, client)) = guard.as_ref()
+                && !client.is_expired()
             {
                 return Ok(client.clone());
             }
@@ -1406,7 +1419,7 @@ fn norm(s: &str) -> String {
 
 /// Versions that aren't the original recording unless the Spotify title says so.
 const VARIANTS: &[&str] = &[
-    "remix", "edit", "mix", "live", "karaoke", "instrumental", "cover", "sped up", "slowed", "acoustic", "version", "made famous", "originally performed", "in the style of", "tribute", "tv size",
+    "remix", "edit", "mix", "live", "karaoke", "instrumental", "cover", "sped up", "slowed", "reverb", "nightcore", "8d", "acoustic", "version", "made famous", "originally performed", "in the style of", "tribute", "tv size",
 ];
 
 fn score(hit: &YtTrack, t: &Track) -> i32 {
@@ -1428,8 +1441,8 @@ fn score(hit: &YtTrack, t: &Track) -> i32 {
     let (spotify, youtube) = (t.name.to_lowercase(), hit.title.to_lowercase());
     for v in VARIANTS {
         score += match (youtube.contains(v), spotify.contains(v)) {
-            (true, false) => -1,
-            (true, true) => 1,
+            (true, false) => -3,
+            (true, true) => 2,
             _ => 0,
         };
     }

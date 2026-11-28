@@ -236,6 +236,7 @@ pub struct Client {
     client_version: String,
     pub sp_dc: Option<String>,
     hashes: Hashes,
+    expires_at: std::time::Instant,
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -246,6 +247,10 @@ struct Hashes {
 }
 
 impl Client {
+    pub fn is_expired(&self) -> bool {
+        std::time::Instant::now() >= self.expires_at
+    }
+
     /// `sp_dc` signs in as the user it belongs to; `None` is anonymous.
     pub async fn connect(sp_dc: Option<&str>, data_dir: &Path) -> Result<Self> {
         let http = crate::proxy::apply(reqwest::Client::builder())
@@ -275,10 +280,11 @@ impl Client {
 
         // The access token, client token and query hashes don't depend on each other.
         let (token, hashes) = tokio::try_join!(access_token(&http, sp_dc, &device_id, &bundle), query_hashes(&http, &bundle, data_dir))?;
-        let (access_token, client_id) = token;
+        let (access_token, client_id, ttl) = token;
         let client_token = client_token(&http, &client_version, &client_id, &device_id).await?;
         let sp_dc = sp_dc.map(str::to_owned);
-        Ok(Self { http, access_token, client_token, client_version, sp_dc, hashes })
+        let expires_at = std::time::Instant::now() + ttl;
+        Ok(Self { http, access_token, client_token, client_version, sp_dc, hashes, expires_at })
     }
 
     fn hash(&self, operation: &str) -> Result<&str> {
@@ -419,8 +425,19 @@ impl Client {
     }
 
     async fn search_desktop_with_uris(&self, query: &str, limit: usize) -> Result<(Vec<(String, Track)>, Vec<Entry>)> {
+        let parts: Vec<&str> = query.split_whitespace().collect();
+        let search_term = if parts.len() >= 3 {
+            let cleaned: Vec<&str> = parts
+                .iter()
+                .copied()
+                .filter(|w| !w.eq_ignore_ascii_case("von") && !w.eq_ignore_ascii_case("by"))
+                .collect();
+            if cleaned.is_empty() { query.trim().to_owned() } else { cleaned.join(" ") }
+        } else {
+            query.trim().to_owned()
+        };
         let variables = json!({
-            "searchTerm": query,
+            "searchTerm": search_term,
             "offset": 0,
             "limit": limit,
             "numberOfTopResults": limit.min(5),
@@ -724,30 +741,72 @@ fn split_artists(s: &str) -> Vec<String> {
     s.split([',', ';']).map(str::trim).filter(|a| !a.is_empty()).map(str::to_owned).collect()
 }
 
-async fn access_token(http: &reqwest::Client, sp_dc: Option<&str>, device_id: &str, bundle: &str) -> Result<(String, String)> {
-    let (version, secret) = totp_secret(http, bundle).await;
-    let totp = totp(&secret, SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
-    let version = version.to_string();
-    let mut cookie = format!("sp_t={device_id}");
-    if let Some(sp_dc) = sp_dc {
-        cookie.push_str(&format!("; sp_dc={sp_dc}"));
-    }
-    let resp: Value = http
-        .get("https://open.spotify.com/api/token")
-        .query(&[("reason", "init"), ("productType", "web-player"), ("totp", &totp), ("totpServer", &totp), ("totpVer", &version)])
-        .header("Cookie", cookie)
+async fn server_time_secs(http: &reqwest::Client) -> u64 {
+    if let Ok(resp) = http
+        .get("https://open.spotify.com/api/server-time")
+        .timeout(std::time::Duration::from_secs(3))
         .send()
-        .await?
-        .error_for_status()
-        .context("Spotify refused an access token")?
-        .json()
-        .await?;
-    if sp_dc.is_some() && resp["isAnonymous"] != false {
-        bail!(SignedOut);
+        .await
+        && let Ok(v) = resp.json::<Value>().await
+        && let Some(ts) = v["serverTime"].as_u64()
+    {
+        return ts;
     }
-    let token = resp["accessToken"].as_str().context("Spotify returned no access token")?;
-    let client_id = resp["clientId"].as_str().context("Spotify returned no client id")?;
-    Ok((token.to_owned(), client_id.to_owned()))
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+async fn access_token(http: &reqwest::Client, sp_dc: Option<&str>, device_id: &str, bundle: &str) -> Result<(String, String, std::time::Duration)> {
+    let (version, secret) = totp_secret(http, bundle).await;
+    let version = version.to_string();
+    let mut cookie = String::new();
+    if !device_id.is_empty() {
+        cookie.push_str(&format!("sp_t={device_id}"));
+    }
+    if let Some(sp_dc) = sp_dc {
+        if !cookie.is_empty() {
+            cookie.push_str("; ");
+        }
+        cookie.push_str(&format!("sp_dc={sp_dc}"));
+    }
+
+    let reasons = if sp_dc.is_some() { ["init", "transport"].as_slice() } else { ["init"].as_slice() };
+    let mut last_resp = None;
+    for (idx, reason) in reasons.iter().enumerate() {
+        let now_s = server_time_secs(http).await;
+        let totp = totp(&secret, now_s);
+        let mut req = http
+            .get("https://open.spotify.com/api/token")
+            .query(&[("reason", *reason), ("productType", "web-player"), ("totp", &totp), ("totpServer", &totp), ("totpVer", &version)]);
+        if !cookie.is_empty() {
+            req = req.header("Cookie", &cookie);
+        }
+        let resp: Value = req
+            .send()
+            .await?
+            .error_for_status()
+            .context("Spotify refused an access token")?
+            .json()
+            .await?;
+        if sp_dc.is_none() || resp["isAnonymous"] == false {
+            let token = resp["accessToken"].as_str().context("Spotify returned no access token")?;
+            let client_id = resp["clientId"].as_str().context("Spotify returned no client id")?;
+            let now_ms = now_s.saturating_mul(1000);
+            let ttl_secs = resp["accessTokenExpirationTimestampMs"]
+                .as_u64()
+                .map(|exp| exp.saturating_sub(now_ms) / 1000)
+                .unwrap_or(2700)
+                .saturating_sub(90)
+                .clamp(60, 45 * 60);
+            return Ok((token.to_owned(), client_id.to_owned(), std::time::Duration::from_secs(ttl_secs)));
+        }
+        last_resp = Some(resp);
+        if idx + 1 < reasons.len() {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
+
+    let _ = last_resp;
+    bail!(SignedOut);
 }
 
 /// The saved Spotify sign-in has expired or was signed out elsewhere.

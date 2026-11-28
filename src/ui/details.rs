@@ -419,7 +419,9 @@ fn draw_animated_equalizer(ui: &mut Ui, center: Pos2, time: f64) {
 }
 
 fn friends_content(app: &mut App, ui: &mut Ui) {
-    let is_signed_in = matches!(*app.transfer.account.lock().unwrap(), crate::transfer::Account::SignedIn { .. });
+    app.transfer.ensure_account(&app.backend);
+    let account = app.transfer.account.lock().unwrap().clone();
+    let is_signed_in = matches!(account, crate::transfer::Account::SignedIn { .. });
 
     if !is_signed_in {
         ui.vertical_centered(|ui| {
@@ -429,12 +431,34 @@ fn friends_content(app: &mut App, ui: &mut Ui) {
             ui.add_space(18.0);
             ui.label(egui::RichText::new("Friend Activity").font(theme::bold(17.0)).color(theme::text()));
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Connect your Spotify account to see what your friends are listening to in real time.")
-                .font(theme::regular(13.0))
-                .color(theme::text_dim()));
-            ui.add_space(20.0);
-            if super::widgets::pill(ui, "Sign in to Spotify", Some(crate::theme::icon::USERS), true).clicked() {
-                app.actions.push(Action::Go(crate::ui::Page::Settings));
+            match account {
+                crate::transfer::Account::Unknown | crate::transfer::Account::Loading => {
+                    ui.spinner();
+                    ui.add_space(10.0);
+                    ui.label(egui::RichText::new("Connecting to Spotify…").font(theme::regular(13.0)).color(theme::text_dim()));
+                }
+                crate::transfer::Account::Failed(err) => {
+                    ui.label(egui::RichText::new(err).font(theme::regular(12.5)).color(theme::text_dim()));
+                    ui.add_space(16.0);
+                    if app.transfer.cookie().is_some()
+                        && super::widgets::pill(ui, "Retry Spotify", Some(crate::theme::icon::ROTATE_CW), false).clicked()
+                    {
+                        app.transfer.retry_account(&app.backend);
+                    }
+                    ui.add_space(8.0);
+                    if super::widgets::pill(ui, "Sign in to Spotify", Some(crate::theme::icon::USERS), true).clicked() {
+                        app.start_spotify_sign_in(ui.ctx());
+                    }
+                }
+                _ => {
+                    ui.label(egui::RichText::new("Connect your Spotify account to see what your friends are listening to in real time.")
+                        .font(theme::regular(13.0))
+                        .color(theme::text_dim()));
+                    ui.add_space(20.0);
+                    if super::widgets::pill(ui, "Sign in to Spotify", Some(crate::theme::icon::USERS), true).clicked() {
+                        app.start_spotify_sign_in(ui.ctx());
+                    }
+                }
             }
         });
         return;

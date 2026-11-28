@@ -226,11 +226,19 @@ fn run(site: Site, profile_dir: PathBuf) -> anyhow::Result<Outcome> {
     // only that browser holds (`__Secure-1PSIDRTS`, renewed every 10 minutes), so the
     // copy the app takes stops working after some hours. Without them Google signs in
     // the way it does Firefox and Safari, and the copy lasts.
+    let proxy_load = proxy.clone();
     let webview = crate::proxy::webview(builder, matches!(site, Site::Google))
         .with_url(site.start())
         .with_on_page_load_handler(move |ev, url| {
             if matches!(ev, PageLoadEvent::Finished) && url.starts_with(site.home()) {
-                let _ = proxy.send_event(());
+                let _ = proxy_load.send_event(());
+                let p = proxy_load.clone();
+                std::thread::spawn(move || {
+                    for ms in [300, 500, 900] {
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
+                        let _ = p.send_event(());
+                    }
+                });
             }
         })
         .build_in(&window)?;

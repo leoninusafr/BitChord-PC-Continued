@@ -280,12 +280,16 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
     let mut reorder: Option<(String, String)> = None;
     let mut hide: Option<String> = None;
     let transferring = super::transfer::sidebar_visible(app, ui.input(|i| i.time));
+    let downloading = app.updater.as_ref().and_then(|u| match u.state() {
+        crate::update::State::Downloading { version, percent } => Some((version, percent)),
+        _ => None,
+    });
     let ready = app.updater.as_ref().and_then(|u| match u.state() {
         crate::update::State::Ready { version, .. } => Some(version),
         _ => None,
     });
     // Room under the list: transfer or updater card if active
-    let bottom_h = if transferring { 88.0 } else if ready.is_some() { 60.0 } else { 8.0 };
+    let bottom_h = if transferring { 88.0 } else if ready.is_some() || downloading.is_some() { 60.0 } else { 8.0 };
     let list_h = (ui.available_height() - bottom_h).max(0.0);
     ui.allocate_ui(vec2(ui.available_width(), list_h), |ui| {
         if !app.logged_in {
@@ -597,6 +601,23 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 ui.painter().text(pos2(rect.left() + 46.0, rect.top() + 35.0), Align2::LEFT_CENTER, format!("BitChord {v}"), theme::regular(12.0), theme::with_alpha(theme::text(), 0.75 * a));
             }
             restart = resp.clicked();
+        } else if let Some((v, pct)) = &downloading {
+            ui.add_space(6.0);
+            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::hover());
+            if collapsed {
+                resp.on_hover_text(format!("Downloading BitChord {v} ({pct}%)"));
+            }
+            ui.painter().rect_filled(rect, 12.0, theme::glass(0.08));
+            let frac = (*pct as f32 / 100.0).clamp(0.0, 1.0);
+            if frac > 0.0 {
+                let fill = Rect::from_min_size(rect.min, vec2(rect.width() * frac, rect.height()));
+                ui.painter().rect_filled(fill, 12.0, theme::with_alpha(look.accent, 0.20));
+            }
+            glyphs::draw(ui, pos2(rect.left() + ICON_X, rect.center().y), LUCIDE, glyphs::SPARKLES, theme::text_dim());
+            if a > 0.0 {
+                ui.painter().text(pos2(rect.left() + 46.0, rect.top() + 17.0), Align2::LEFT_CENTER, format!("Updating… {pct}%"), theme::semibold(13.5), theme::with_alpha(theme::text(), a));
+                ui.painter().text(pos2(rect.left() + 46.0, rect.top() + 35.0), Align2::LEFT_CENTER, format!("BitChord {v}"), theme::regular(12.0), theme::with_alpha(theme::text(), 0.75 * a));
+            }
         }
     });
     if restart {
@@ -638,8 +659,16 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
         pos2(panel.left() - 28.0, screen.top()),
         pos2(panel.right() + 28.0, bar_bottom),
     );
-    ui.painter().rect_filled(glass_rect, 0.0, theme::panel(0.86));
-    ui.painter().rect_filled(glass_rect, 0.0, theme::glass(0.06));
+    let dark = !theme::light();
+    if app.liquid_glass
+        && let Some(glass) = &app.glass
+    {
+        glass.paint(ui.painter(), glass_rect, crate::glass::GlassStyle::bar(dark), dark);
+        ui.painter().rect_filled(glass_rect, 0.0, theme::panel(0.28));
+    } else {
+        ui.painter().rect_filled(glass_rect, 0.0, theme::panel(0.86));
+        ui.painter().rect_filled(glass_rect, 0.0, theme::glass(0.06));
+    }
     ui.painter().hline(glass_rect.x_range(), glass_rect.bottom(), egui::Stroke::new(1.0, theme::glass(0.12)));
     let feather = Rect::from_min_max(pos2(glass_rect.left(), glass_rect.bottom() + 1.0), pos2(glass_rect.right(), glass_rect.bottom() + 15.0));
     vgradient(ui.painter(), feather, theme::panel(0.32), Color32::TRANSPARENT);
@@ -727,10 +756,17 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
     let s_field = ui.interact(pill_click_rect, ui.scope_id().with("top-search-pill"), Sense::click()).on_hover_cursor(egui::CursorIcon::Text);
     app.search_rect = Some(s_rect);
     let sf = theme::anim_bool(ui.ctx(), "top-search-focus", app.search_focused, 0.2);
-    ui.painter().rect_filled(s_rect, 17.0, theme::panel(0.55));
-    ui.painter().rect_filled(s_rect, 17.0, theme::glass(0.10 + 0.06 * sf));
-    if sf > 0.0 {
-        ui.painter().rect_stroke(s_rect, 17.0, egui::Stroke::new(1.0, theme::glass(0.28 * sf)), egui::StrokeKind::Inside);
+    if app.liquid_glass
+        && let Some(glass) = &app.glass
+    {
+        glass.paint(ui.painter(), s_rect, crate::glass::GlassStyle::pill(dark, sf > 0.2), dark);
+        ui.painter().rect_filled(s_rect, 17.0, theme::panel(0.16));
+    } else {
+        ui.painter().rect_filled(s_rect, 17.0, theme::panel(0.55));
+        ui.painter().rect_filled(s_rect, 17.0, theme::glass(0.10 + 0.06 * sf));
+        if sf > 0.0 {
+            ui.painter().rect_stroke(s_rect, 17.0, egui::Stroke::new(1.0, theme::glass(0.28 * sf)), egui::StrokeKind::Inside);
+        }
     }
     glyphs::draw(ui, pos2(s_rect.left() + 16.0, cy), 15.0, glyphs::SEARCH, if sf > 0.0 { theme::text() } else { theme::text_dim() });
 
@@ -822,6 +858,10 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
                 app.search_due = None;
             }
         }
+        if let Some(due) = app.suggest_due {
+            let now = ui.input(|i| i.time);
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((due - now).max(0.0)));
+        }
         if let Some(due) = app.search_due {
             let now = ui.input(|i| i.time);
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((due - now).max(0.0)));
@@ -854,14 +894,36 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
     }
 
     // 3. RIGHT SECTION: Friend Activity Button + Account Avatar
+    let sp_status = {
+        let acc = app.transfer.account.lock().unwrap();
+        match &*acc {
+            crate::transfer::Account::SignedIn { name, .. } => Ok(if name.is_empty() { "Connected".to_owned() } else { format!("Connected as {name}") }),
+            crate::transfer::Account::Loading | crate::transfer::Account::Unknown => Err((false, "Connecting…".to_owned())),
+            crate::transfer::Account::Failed(_) => Err((true, "Needs reconnect".to_owned())),
+            crate::transfer::Account::SignedOut => Err((false, "Not signed in".to_owned())),
+        }
+    };
     let is_friends_open = app.details_open && app.right_tab == super::RightTab::Friends;
     let friends_r = Rect::from_center_size(pos2(right - 54.0, cy), Vec2::splat(32.0));
     let f_resp = ui.interact(friends_r, ui.scope_id().with("top-friends"), Sense::click());
-    let f_resp = named(f_resp, "Friend Activity").on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Friend Activity");
+    let f_tip = match &sp_status {
+        Ok(s) => format!("Friend Activity (Spotify: {s})"),
+        Err((_, s)) => format!("Friend Activity (Spotify: {s})"),
+    };
+    let f_resp = named(f_resp, "Friend Activity").on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(f_tip);
     let fh = theme::anim_bool(ui.ctx(), f_resp.id.with("fh"), f_resp.hovered() || is_friends_open, 0.12);
     ui.painter().circle_filled(friends_r.center(), 16.0, theme::glass(if is_friends_open { 0.16 } else { 0.06 + 0.08 * fh }));
     let fg = if is_friends_open { app.accent_color() } else { theme::lerp_color(theme::text_dim(), theme::text(), fh) };
     glyphs::draw(ui, friends_r.center(), 18.0, glyphs::USERS, fg);
+    match &sp_status {
+        Ok(_) => {
+            ui.painter().circle_filled(pos2(friends_r.right() - 4.0, friends_r.bottom() - 4.0), 3.2, Color32::from_rgb(30, 215, 96));
+        }
+        Err((true, _)) => {
+            ui.painter().circle_filled(pos2(friends_r.right() - 4.0, friends_r.bottom() - 4.0), 3.2, Color32::from_rgb(245, 158, 11));
+        }
+        Err((false, _)) => {}
+    }
     if is_friends_open {
         ui.painter().circle_filled(pos2(friends_r.center().x, friends_r.bottom() + 1.0), 1.8, app.accent_color());
     }
@@ -871,7 +933,17 @@ pub fn top_bar(app: &mut App, ui: &mut Ui, top_rect: Rect) {
 
     let acc_r = Rect::from_center_size(pos2(right - 18.0, cy), Vec2::splat(32.0));
     let resp = ui.interact(acc_r, ui.scope_id().with("account"), Sense::click());
-    let resp = named(resp, "Account / Settings").on_hover_cursor(egui::CursorIcon::PointingHand);
+    let ytm_label = if app.logged_in {
+        app.account_name.as_deref().filter(|n| !n.is_empty()).unwrap_or("Signed in")
+    } else {
+        "Not signed in"
+    };
+    let sp_label = match &sp_status {
+        Ok(s) | Err((_, s)) => s.as_str(),
+    };
+    let resp = named(resp, "Account / Settings")
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(format!("Settings · YouTube Music: {ytm_label} · Spotify: {sp_label}"));
     let initial = app.account_name.as_deref().and_then(|n| n.chars().next()).unwrap_or('?');
     if app.logged_in {
         ui.painter().circle_filled(acc_r.center(), 16.0, theme::lerp_color(app.accent_color(), Color32::BLACK, 0.35));
@@ -1012,8 +1084,18 @@ pub fn search_field(app: &mut App, ui: &mut Ui, width: f32) {
 /// Search suggestions dropdown under the search box.
 pub fn suggestions(app: &mut App, ctx: &egui::Context) {
     let Some(rect) = app.search_rect else { return };
+    let typed = app.search_text.trim().to_owned();
+    let sp_hits: Vec<crate::transfer::spotify::Track> = if !typed.is_empty() {
+        app.spotify_search
+            .as_ref()
+            .filter(|(sq, _, _)| sq.trim() == typed)
+            .map(|(_, trs, _)| trs.iter().take(3).cloned().collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     // Through a press on a remove button too: its release briefly takes the box's focus.
-    let show = (app.search_focused || app.forget_held) && !app.suggestions.1.is_empty() && !app.np_open;
+    let show = (app.search_focused || app.forget_held) && (!app.suggestions.1.is_empty() || !sp_hits.is_empty()) && !app.np_open;
     let t = theme::anim_bool(ctx, "suggest-open", show, 0.15);
     if t <= 0.0 {
         return;
@@ -1124,6 +1206,26 @@ pub fn suggestions(app: &mut App, ctx: &egui::Context) {
                             break;
                         }
                     }
+                    for (si, st) in sp_hits.iter().enumerate() {
+                        let label = format!("{} — {}", st.name, st.artist_line());
+                        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
+                        let resp = named(resp, &label).on_hover_cursor(egui::CursorIcon::PointingHand);
+                        let h = theme::anim_bool(ui.ctx(), resp.id.with(("sp_sug", si)), resp.contains_pointer(), 0.1);
+                        ui.painter().rect_filled(r, 8.0, theme::glass(0.08 * h));
+                        ui.painter().circle_filled(pos2(r.left() + 20.0, r.center().y), 5.0, super::transfer::SPOTIFY);
+                        widgets::text_at(ui, pos2(r.left() + 36.0, r.center().y - 9.0), &label, theme::semibold(13.5), theme::text(), r.width() - 72.0);
+                        let play_center = pos2(r.right() - 22.0, r.center().y);
+                        if h > 0.0 {
+                            ui.painter().circle_filled(play_center, 13.0, super::transfer::SPOTIFY);
+                            icon_at(ui, play_center, icon::PLAY, 11.0, Color32::from_rgb(11, 11, 11));
+                        }
+                        if resp.is_pointer_button_down_on() || resp.clicked() {
+                            app.suggestions = Default::default();
+                            app.search_focused = false;
+                            app.actions.push(Action::PlaySpotify(st.clone()));
+                            break;
+                        }
+                    }
                     if let Some((t, _)) = app.forgetting.take_if(|(_, at)| now - *at >= 0.18) {
                         app.suggestions.1.retain(|s| s.forget.as_deref() != Some(t.as_str()));
                     }
@@ -1158,9 +1260,17 @@ pub fn player_bar(app: &mut App, ui: &mut Ui, now: f64, _frosted: bool) {
 
     // Frosted Liquid Glass surface across the full-width player bar with rounded upper corners
     let bar_corners = egui::CornerRadius { nw: 12, ne: 12, sw: 0, se: 0 };
-    ui.painter().rect_filled(full, bar_corners, theme::panel(0.40));
-    ui.painter().rect_filled(full, bar_corners, theme::glass(0.06));
-    ui.painter().rect_stroke(full, bar_corners, egui::Stroke::new(1.0, theme::glass(0.12)), egui::StrokeKind::Inside);
+    if app.liquid_glass
+        && let Some(glass) = &app.glass
+    {
+        let dark = !theme::light();
+        glass.paint(ui.painter(), full, crate::glass::GlassStyle::panel(dark, 12.0), dark);
+        ui.painter().rect_filled(full, bar_corners, theme::panel(0.22));
+    } else {
+        ui.painter().rect_filled(full, bar_corners, theme::panel(0.40));
+        ui.painter().rect_filled(full, bar_corners, theme::glass(0.06));
+        ui.painter().rect_stroke(full, bar_corners, egui::Stroke::new(1.0, theme::glass(0.12)), egui::StrokeKind::Inside);
+    }
 
     let status = app.audio.status.clone();
     let hold = app.mix_hold().map(|h| (h.total, h.mix, app.mix_hold_pos(h)));

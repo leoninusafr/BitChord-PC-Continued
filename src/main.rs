@@ -5,6 +5,7 @@ mod apple;
 mod artist_signature;
 mod autostart;
 mod fullscreen;
+mod glass;
 mod proxy;
 mod remote;
 mod renderer;
@@ -203,6 +204,10 @@ fn main() -> eframe::Result {
                 (_, Some(rs)) if shader => Some(shader::Background::new_wgpu(rs)),
                 _ => None,
             };
+            let glass = match &cc.gl {
+                Some(gl) if shader => glass::LiquidGlass::new(gl).map_err(|e| log::warn!("liquid glass shader unavailable: {e:#}")).ok(),
+                _ => None,
+            };
 
             Ok(Box::new(ui::App::new(
                 backend,
@@ -210,6 +215,7 @@ fn main() -> eframe::Result {
                 ui::Channels { resp_rx, audio_rx, media_rx },
                 media,
                 bg,
+                glass,
                 cc.storage,
             )))
         }),

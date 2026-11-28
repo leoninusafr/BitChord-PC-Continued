@@ -768,13 +768,12 @@ impl Backend {
                     Resp::ArtistSignature { key, signature }
                 }
                 Req::Radio { seed, song_of } => {
-                    // A music video's radio is music videos; its song's is songs, as from the
-                    // song itself. The lookup is shared with its play's (one per video).
+                    // A music video's radio is songs too (no music videos in auto radio).
                     let song = self.song_version(&seed, song_of.as_ref(), PREFETCH_SONG_WAIT).await;
                     let from = song.as_ref().map_or(&seed, |s| &s.id);
                     let mut tracks = ytm::radio(api, from, false, 50).await?;
                     // The radio starts with its seed, which is playing already.
-                    tracks.retain(|t| t.id != *from);
+                    tracks.retain(|t| t.id != *from && !t.music_video);
                     Resp::Radio { seed, tracks }
                 }
                 Req::PlayCollection { target } => {
@@ -874,16 +873,36 @@ impl Backend {
 
     /// Songs, albums, artists and playlists for a search, asked at once. Only the songs
     /// must arrive (no music videos).
+    /// Strip German/English connector filler words ("von", "by") when surrounded by terms
+    /// so queries like "newjack city von guy" find the original artist+title cleanly.
     async fn search(&self, query: String, me: bool) -> anyhow::Result<Resp> {
         let api = &*self.api;
-        let (t, al, ar, pl) = tokio::join!(
+        let clean = clean_search_query(&query);
+        let alt_q = (clean != query && !clean.is_empty()).then_some(clean.as_str());
+        let (t, t_clean, t_all, al, ar, pl) = tokio::join!(
             ytm::search_songs(api, &query, me),
+            async {
+                match alt_q {
+                    Some(q) => ytm::search_songs(api, q, me).await,
+                    None => Ok(Vec::new()),
+                }
+            },
+            ytm::search_all(api, alt_q.unwrap_or(&query), me),
             ytm::search_cards(api, &query, ytm::Filter::Albums, me),
             ytm::search_cards(api, &query, ytm::Filter::Artists, me),
             ytm::search_cards(api, &query, ytm::Filter::Playlists, me),
         );
-        let mut tracks = t?;
-        tracks.retain(|tr| !tr.music_video);
+        let mut tracks = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for group in [t, t_clean, t_all] {
+            if let Ok(list) = group {
+                for tr in list {
+                    if !tr.music_video && seen.insert(tr.id.clone()) {
+                        tracks.push(tr);
+                    }
+                }
+            }
+        }
         Ok(Resp::Search(SearchResults {
             tracks,
             albums: al.unwrap_or_default(),
@@ -1791,6 +1810,19 @@ pub fn compact(n: u64) -> String {
 // Larger art URL for the background / now-playing view.
 pub fn art_url(t: &Track) -> Option<String> {
     model::pick(&t.thumbs, 120).map(|u| sized(u, 544))
+}
+
+fn clean_search_query(query: &str) -> String {
+    let parts: Vec<&str> = query.split_whitespace().collect();
+    if parts.len() < 3 {
+        return query.trim().to_owned();
+    }
+    let cleaned: Vec<&str> = parts
+        .iter()
+        .copied()
+        .filter(|w| !w.eq_ignore_ascii_case("von") && !w.eq_ignore_ascii_case("by"))
+        .collect();
+    if cleaned.is_empty() { query.trim().to_owned() } else { cleaned.join(" ") }
 }
 
 #[cfg(test)]

@@ -246,12 +246,24 @@ impl App {
                 }
                 self.toast(format!("Searching and playing \"{q}\"…"));
                 let api = self.backend.api();
+                let xfer = self.transfer.clone();
                 let bg_actions = self.bg_actions.clone();
                 let b = self.backend.clone();
                 self.backend.spawn(async move {
                     let me = api.account().is_some();
-                    let mut songs = crate::ytm::search_songs(&api, &q, me).await.unwrap_or_default();
+                    let (yt_res, sp_res) = tokio::join!(
+                        crate::ytm::search_songs(&api, &q, me),
+                        xfer.search_spotify(&q),
+                    );
+                    let mut songs = yt_res.unwrap_or_default();
                     songs.retain(|t| !t.music_video);
+                    if let Ok((sp_tracks, _)) = sp_res
+                        && let Some(first_sp) = sp_tracks.first()
+                        && let Some(matched) = crate::transfer::match_spotify_track(&api, first_sp).await
+                    {
+                        songs.retain(|t| t.id != matched.id);
+                        songs.insert(0, matched);
+                    }
                     if !songs.is_empty() {
                         bg_actions.lock().unwrap().push(Action::Play(songs, 0));
                         b.wake();
@@ -525,6 +537,7 @@ impl App {
         let editing = ctx.text_edit_focused();
         let i = ctx.input(|i| {
             let k = |key| !typing && i.key_pressed(key);
+            let bare = |key| !typing && !editing && i.modifiers.is_none() && i.key_pressed(key);
             let ctrl = |key| !editing && i.modifiers.ctrl && i.key_pressed(key);
             (
                 k(egui::Key::Space),
@@ -534,6 +547,8 @@ impl App {
                     || (i.modifiers.alt && i.key_pressed(egui::Key::ArrowRight)),
                 ctrl(egui::Key::ArrowRight),
                 ctrl(egui::Key::ArrowLeft),
+                bare(egui::Key::ArrowLeft),
+                bare(egui::Key::ArrowRight),
                 k(egui::Key::L),
                 k(egui::Key::Q),
                 k(egui::Key::F),
@@ -544,7 +559,7 @@ impl App {
                 i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::M, pressed: true, repeat: false, modifiers, .. } if modifiers.ctrl)),
             )
         });
-        let (space, back, fwd, next, prev, lyr, queue, full, esc, vol_up, vol_down, mini) = i;
+        let (space, back, fwd, next, prev, seek_back, seek_fwd, lyr, queue, full, esc, vol_up, vol_down, mini) = i;
         if mini {
             self.actions.push(Action::Mini(!self.mini.target()));
         }
@@ -565,6 +580,11 @@ impl App {
         }
         if prev {
             self.prev();
+        }
+        if (seek_back || seek_fwd) && self.current().is_some() {
+            let pos = self.audio.status.position_smooth().as_secs_f32();
+            let delta = if seek_fwd { 5.0 } else { -5.0 };
+            self.actions.push(Action::Seek((pos + delta).max(0.0)));
         }
         if lyr && self.current().is_some() {
             self.np_open = true;

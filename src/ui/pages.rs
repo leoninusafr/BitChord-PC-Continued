@@ -702,37 +702,96 @@ fn search(app: &mut App, ui: &mut Ui, raw_q: &str, now: f64) {
     }
 
     // Build ONE unified combined song list:
-    // Top Spotify hits (which capture lyrics, popularity & exact intent) are anchored first —
-    // using the instant YouTube Music song when both catalogs agree, or the Spotify track directly when YTM missed it.
+    // Merge YouTube Music + Spotify hits without duplicates, then rank by query relevance
+    // (handling joined words like "newjack" -> "New Jack", German "von", and artist+title matches)
+    // while keeping original catalog rank for lyrics or broad queries.
+    let norm_flat = |s: &str| -> String {
+        s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+    };
+    let q_tokens: Vec<String> = q
+        .split_whitespace()
+        .filter(|w| !w.eq_ignore_ascii_case("von") && !w.eq_ignore_ascii_case("by"))
+        .map(|w| norm_flat(w))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let q_clean_flat: String = q_tokens.join("");
+    let relevance = |title: &str, artist_line: &str, base_idx: usize, dual_hit: bool| -> (i32, usize) {
+        let t_low = title.to_lowercase();
+        let a_low = artist_line.to_lowercase();
+        let t_flat = norm_flat(title);
+        let a_flat = norm_flat(artist_line);
+        let combined_flat = format!("{t_flat}{a_flat}");
+        let mut s = if dual_hit { 6 } else { 0 };
+        if !q_clean_flat.is_empty() {
+            if t_flat == q_clean_flat {
+                s += 30;
+            } else if t_flat.contains(&q_clean_flat) {
+                s += 18;
+            } else if combined_flat.contains(&q_clean_flat) {
+                s += 15;
+            }
+        }
+        let mut title_hits = 0i32;
+        let mut artist_hits = 0i32;
+        for tok in &q_tokens {
+            let in_t = t_flat.contains(tok) || t_low.contains(tok);
+            let in_a = a_flat.contains(tok) || a_low.contains(tok);
+            if in_t {
+                title_hits += 1;
+                s += 6;
+            }
+            if in_a {
+                artist_hits += 1;
+                s += 8;
+            }
+        }
+        if title_hits > 0 && artist_hits > 0 {
+            s += 24;
+        }
+        if !q_tokens.is_empty() && (title_hits + artist_hits) as usize >= q_tokens.len() {
+            s += 14;
+        }
+        // Subtle boost for top Spotify hits on lyric/fuzzy queries when YTM didn't match well
+        (s, base_idx)
+    };
+
     let mut used_ytm = vec![false; yt_tracks.len()];
-    let mut combined_songs: Vec<UnifiedSong<'_>> = Vec::new();
+    let mut ranked: Vec<((i32, usize), UnifiedSong<'_>)> = Vec::new();
     let mut used_sp = vec![false; sp_tracks.len()];
 
     if !pick {
-        for (si, st) in sp_tracks.iter().enumerate().take(6) {
+        for (si, st) in sp_tracks.iter().enumerate() {
+            let a_line = st.artist_line();
             if let Some(yi) = yt_tracks.iter().position(|yt| matches_yt(yt, st)) {
                 if !used_ytm[yi] {
                     used_ytm[yi] = true;
-                    combined_songs.push(UnifiedSong::Ytm(yi, &yt_tracks[yi]));
+                    let rel = relevance(&yt_tracks[yi].title, &yt_tracks[yi].artist_line(), yi.min(si), true);
+                    ranked.push((rel, UnifiedSong::Ytm(yi, &yt_tracks[yi])));
                 }
             } else {
-                combined_songs.push(UnifiedSong::Spotify(st));
+                let (mut s, idx) = relevance(&st.name, &a_line, si, false);
+                if si < 5 {
+                    s += (5 - si as i32) * 2;
+                }
+                ranked.push(((s, idx + 2), UnifiedSong::Spotify(st)));
             }
             used_sp[si] = true;
         }
     }
     for (yi, yt) in yt_tracks.iter().enumerate() {
         if !used_ytm[yi] {
-            combined_songs.push(UnifiedSong::Ytm(yi, yt));
+            let rel = relevance(&yt.title, &yt.artist_line(), yi, false);
+            ranked.push((rel, UnifiedSong::Ytm(yi, yt)));
         }
     }
-    if !pick {
-        for (si, st) in sp_tracks.iter().enumerate() {
-            if !used_sp[si] && !yt_tracks.iter().any(|yt| matches_yt(yt, st)) {
-                combined_songs.push(UnifiedSong::Spotify(st));
-            }
-        }
-    }
+    ranked.sort_by(|(a_sc, a_song), (b_sc, b_song)| {
+        b_sc.0.cmp(&a_sc.0).then_with(|| a_sc.1.cmp(&b_sc.1)).then_with(|| match (a_song, b_song) {
+            (UnifiedSong::Ytm(..), UnifiedSong::Spotify(..)) => std::cmp::Ordering::Less,
+            (UnifiedSong::Spotify(..), UnifiedSong::Ytm(..)) => std::cmp::Ordering::Greater,
+            _ => std::cmp::Ordering::Equal,
+        })
+    });
+    let combined_songs: Vec<UnifiedSong<'_>> = ranked.into_iter().map(|(_, s)| s).collect();
 
     // Combine playlists from YTM and Spotify cleanly (deduplicated by lowercase name)
     let mut combined_playlists: Vec<Card> = yt_playlists.to_vec();
@@ -992,10 +1051,12 @@ fn recent_searches(ui: &mut Ui, app: &mut App) {
 }
 
 /// `pick`: choosing a transfer match, so clicking a song picks it.
-fn top_result(ui: &mut Ui, c: &Card, pick: bool, acts: &mut Vec<Action>) {    ui.vertical(|ui| {
+fn top_result(ui: &mut Ui, c: &Card, pick: bool, acts: &mut Vec<Action>) {
+    ui.vertical(|ui| {
         ui.label(RichText::new("Top result").font(theme::bold(24.0)));
         ui.add_space(8.0);
-        let (rect, resp) = ui.allocate_exact_size(vec2(420.0, 236.0), Sense::click());
+        let card_w = (ui.available_width() * 0.42).clamp(260.0, 400.0);
+        let (rect, resp) = ui.allocate_exact_size(vec2(card_w, 236.0), Sense::click());
         let resp = named(resp, &c.title).on_hover_cursor(egui::CursorIcon::PointingHand);
         let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.contains_pointer(), 0.2);
         ui.painter().rect_filled(rect, 14.0, theme::glass(0.07 + 0.05 * h));
@@ -1377,8 +1438,19 @@ fn artist(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
     });
     if !top.is_empty() {
         ui.add_space(26.0);
+        let filter_key = egui::Id::unique(("artist-top-filter", id));
+        let mut art_filter = ui.data(|d| d.get_temp::<String>(filter_key).unwrap_or_default());
         ui.horizontal(|ui| {
             ui.label(RichText::new("Top songs").font(theme::bold(24.0)).color(theme::text()));
+            ui.add_space(12.0);
+            ui.allocate_ui_with_layout(vec2(190.0, 30.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut art_filter)
+                        .hint_text("Filter songs…")
+                        .desired_width(175.0),
+                );
+            });
+            ui.data_mut(|d| d.insert_temp(filter_key, art_filter.clone()));
             if let Some(pl) = &a.top_playlist {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if pill(ui, "Show all", None, false).clicked() {
@@ -1390,14 +1462,20 @@ fn artist(app: &mut App, ui: &mut Ui, id: &str, now: f64) {
         ui.add_space(12.0);
         let expand_id = egui::Id::unique(("artist-top-expanded", id));
         let mut expanded = ui.data(|d| d.get_temp::<bool>(expand_id).unwrap_or(false));
-        let visible_limit = if expanded { top.len() } else { 8 };
-        for (i, t) in top.iter().enumerate().take(visible_limit) {
+        let needle = art_filter.trim().to_lowercase();
+        let shown_songs: Vec<(usize, &Track)> = top
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| needle.is_empty() || t.title.to_lowercase().contains(&needle) || t.artist_line().to_lowercase().contains(&needle))
+            .collect();
+        let visible_limit = if expanded || !needle.is_empty() { shown_songs.len() } else { 8 };
+        for &(i, t) in shown_songs.iter().take(visible_limit) {
             let o = rows.opts(&app.liked, t, None, true);
             if track_row(ui, t, &o, acts).clicked() {
                 acts.push(Action::Play(top.clone(), i));
             }
         }
-        if top.len() > 8 {
+        if needle.is_empty() && top.len() > 8 {
             ui.add_space(8.0);
             let label = if expanded {
                 "Show less".to_string()
@@ -1989,7 +2067,46 @@ fn spotify_sync_tab(app: &mut App, ui: &mut Ui, _now: f64) {
                 });
             }
         }
-        _ => {
+        Account::Unknown | Account::Loading => {
+            let (c_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 120.0), Sense::hover());
+            ui.painter().rect_filled(c_rect, 14.0, theme::panel(0.4));
+            ui.painter().rect_stroke(c_rect, 14.0, egui::Stroke::new(1.0, theme::glass(0.12)), egui::StrokeKind::Inside);
+            let inner = c_rect.shrink(18.0);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Connecting to Spotify…").font(theme::bold(16.0)).color(theme::text()));
+                        ui.label(RichText::new("Loading your Spotify playlists and Liked Songs.").font(theme::regular(13.0)).color(theme::text_dim()));
+                    });
+                });
+            });
+        }
+        Account::Failed(err) => {
+            let (c_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 156.0), Sense::hover());
+            ui.painter().rect_filled(c_rect, 14.0, theme::panel(0.4));
+            ui.painter().rect_stroke(c_rect, 14.0, egui::Stroke::new(1.0, theme::glass(0.12)), egui::StrokeKind::Inside);
+            let inner = c_rect.shrink(18.0);
+            let badge_r = Rect::from_center_size(pos2(inner.left() + 26.0, inner.top() + 26.0), Vec2::splat(40.0));
+            super::transfer::badge(ui, badge_r);
+            let tx = badge_r.right() + 18.0;
+            ui.painter().text(pos2(tx, inner.top() + 8.0), egui::Align2::LEFT_TOP, "Spotify Connection Issue", theme::bold(17.0), theme::text());
+            let g = widgets::galley_wrapped(ui, err, theme::regular(13.0), theme::text_dim(), (inner.right() - tx).max(160.0), 2);
+            ui.painter().galley(pos2(tx, inner.top() + 34.0), g, theme::text_dim());
+            let btn_r = Rect::from_min_size(pos2(tx, inner.bottom() - 36.0), vec2(360.0, 34.0));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(btn_r), |ui| {
+                ui.horizontal(|ui| {
+                    if app.transfer.cookie().is_some() && pill(ui, "Retry Spotify", Some(icon::ROTATE_CW), true).clicked() {
+                        app.transfer.retry_account(&app.backend);
+                    }
+                    if pill(ui, "Sign in again", Some(icon::CIRCLE_USER), false).clicked() {
+                        app.start_spotify_sign_in(ui.ctx());
+                    }
+                });
+            });
+        }
+        Account::SignedOut => {
             // Signed out onboarding card
             let (c_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 160.0), Sense::hover());
             ui.painter().rect_filled(c_rect, 14.0, theme::panel(0.4));
@@ -2076,8 +2193,10 @@ fn settings(app: &mut App, ui: &mut Ui) {
 
 fn settings_body(app: &mut App, ui: &mut Ui) {
     page_title(ui, "Settings");
+    settings_updates(app, ui);
     settings_account(app, ui);
     settings_playback(app, ui);
+    settings_equalizer(app, ui);
     settings_downloads(ui);
     settings_lyrics(app, ui);
     settings_artists(app, ui);
@@ -2088,6 +2207,79 @@ fn settings_body(app: &mut App, ui: &mut Ui) {
     settings_card(ui, |ui| network(app, ui));
     super::transfer::settings_section(app, ui);
     settings_shortcuts(ui);
+}
+
+fn settings_updates(app: &mut App, ui: &mut Ui) {
+    use crate::update::{State, current_version};
+    let current = current_version();
+    let updater = app.updater.clone();
+    let state = updater.as_ref().map_or(State::Idle, |u| u.state());
+    let (mut do_check, mut do_restart) = (false, false);
+    let mut open_notes: Option<(String, bool)> = None;
+    let mode = if crate::update::portable_dir().is_some() {
+        "Portable"
+    } else if crate::update::installed() {
+        "Installed"
+    } else {
+        "Standalone"
+    };
+    section_label(ui, "Updates", Some(&format!("v{current} \u{2022} {mode}")));
+    settings_card(ui, |ui| {
+        let title = match &state {
+            State::Ready { version, .. } => format!("Update ready: BitChord v{version}"),
+            State::Downloading { version, percent } => format!("Downloading BitChord v{version} ({percent}%)"),
+            _ => format!("BitChord v{current}"),
+        };
+        let desc = match &state {
+            State::Idle => "Automatic in-app updates check for new releases cleanly in the background.",
+            State::Checking => "Checking for a newer version…",
+            State::UpToDate => "You are running the latest version.",
+            State::Downloading { .. } => "Downloading the update in the background. You can keep listening.",
+            State::Ready { .. } => "Click Update & Restart to apply the update automatically with no browser download.",
+            State::Failed(_) => "Update check failed. Check your connection and try again.",
+        };
+        let err_tip = match &state {
+            State::Failed(e) => Some(e.clone()),
+            _ => None,
+        };
+        setting_row(ui, &title, Some(desc), |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                match &state {
+                    State::Checking | State::Downloading { .. } => {
+                        ui.spinner();
+                    }
+                    State::Ready { version, .. } => {
+                        if pill(ui, "What's new", None, false).clicked() {
+                            open_notes = Some((version.clone(), true));
+                        }
+                        if pill(ui, "Update & Restart", Some(icon::SPARKLES), true).clicked() {
+                            do_restart = true;
+                        }
+                    }
+                    State::Idle | State::UpToDate | State::Failed(_) => {
+                        if pill(ui, "What's new", Some(icon::SPARKLES), false).clicked() {
+                            open_notes = Some((current.clone(), false));
+                        }
+                        let mut chk = pill(ui, "Check for updates", Some(icon::ROTATE_CW), false);
+                        if let Some(err) = &err_tip {
+                            chk = chk.on_hover_text(err);
+                        }
+                        do_check = chk.clicked();
+                    }
+                }
+            });
+        });
+    });
+    if do_check && let Some(u) = updater {
+        u.force_check();
+    }
+    if let Some((version, ready)) = open_notes {
+        app.notes_dialog = Some(super::notes::NotesDialog { version, ready });
+    }
+    if do_restart {
+        app.restart_to_update(ui.ctx());
+    }
 }
 
 /// Settings › Account: signing in and out, and which channel to use.
@@ -2297,6 +2489,120 @@ fn settings_playback(app: &mut App, ui: &mut Ui) {
             }
         }
     });
+}
+
+/// Settings › Equalizer.
+fn settings_equalizer(app: &mut App, ui: &mut Ui) {
+    use crate::audio::eq;
+    section_label(ui, "Equalizer", None);
+    settings_card(ui, |ui| {
+        setting_row(ui, "Equalizer", Some("10-band graphic equalizer with smooth presets. Shapes only what you hear locally."), |ui| {
+            if toggle(ui, &mut app.eq_on, "Equalizer").changed() {
+                app.set_eq();
+            }
+        });
+        ui.add_enabled_ui(app.eq_on, |ui| {
+            divider(ui);
+            setting_row(ui, "Preset", None, |ui| {
+                let btn = dropdown_button(ui, eq::preset_name(&app.eq_gains).unwrap_or("Custom"), 180.0, "Equalizer preset");
+                let mut pick = None;
+                egui::Popup::menu(&btn).show(|ui| {
+                    ui.set_width(200.0);
+                    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                    ui.add_space(4.0);
+                    for (name, gains) in &eq::PRESETS {
+                        if option_row(ui, name, app.eq_gains == *gains).clicked() {
+                            pick = Some(*gains);
+                            ui.close();
+                        }
+                    }
+                });
+                if let Some(g) = pick {
+                    app.eq_gains = g;
+                    app.set_eq();
+                }
+            });
+            divider(ui);
+            if eq_bands(ui, &mut app.eq_gains) {
+                app.set_eq();
+            }
+            divider(ui);
+            setting_row(ui, "Prevent clipping", Some("Attenuate by the highest band boost so loud tracks do not crackle."), |ui| {
+                if toggle(ui, &mut app.eq_no_clip, "Prevent clipping").changed() {
+                    app.set_eq();
+                }
+            });
+        });
+    });
+}
+
+/// The equalizer's bands as vertical sliders over the resulting frequency response curve.
+fn eq_bands(ui: &mut Ui, gains: &mut crate::audio::eq::Gains) -> bool {
+    use crate::audio::eq::{BANDS, MAX_DB, response};
+    const LABELS: [&str; 10] = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
+    const NAMES: [&str; 10] = ["31 Hz", "62 Hz", "125 Hz", "250 Hz", "500 Hz", "1 kHz", "2 kHz", "4 kHz", "8 kHz", "16 kHz"];
+    const GUTTER: f32 = 34.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 210.0), Sense::hover());
+    let fade = if ui.is_enabled() { 1.0 } else { 0.45 };
+    let accent = ui.ctx().data(|d| d.get_temp::<Color32>(egui::Id::unique("accent"))).unwrap_or(theme::RED);
+    let p = ui.painter();
+    let top = rect.top() + 26.0;
+    let bottom = rect.bottom() - 30.0;
+    let mid = (top + bottom) / 2.0;
+    let y_of = |db: f32| mid - db / MAX_DB * (bottom - top) / 2.0;
+    let col_w = (rect.width() - GUTTER) / BANDS.len() as f32;
+    let x_of = |i: f32| rect.left() + GUTTER + col_w * (i + 0.5);
+    for (db, text) in [(MAX_DB, "+12"), (0.0, "0"), (-MAX_DB, "\u{2212}12")] {
+        p.text(pos2(rect.left(), y_of(db)), Align2::LEFT_CENTER, text, theme::regular(11.5), theme::with_alpha(theme::text_dim(), fade));
+    }
+    p.line_segment([pos2(x_of(-0.5), mid), pos2(x_of(9.5), mid)], egui::Stroke::new(1.0, theme::glass(0.10 * fade)));
+    let db_at = response(gains);
+    let curve: Vec<egui::Pos2> = (0..=180)
+        .map(|k| {
+            let i = 9.0 * k as f32 / 180.0;
+            pos2(x_of(i), y_of(db_at(BANDS[0] * 2f32.powf(i))))
+        })
+        .collect();
+    ui.painter_at(rect).add(egui::Shape::line(curve, egui::Stroke::new(2.0, theme::with_alpha(accent, 0.55 * fade))));
+    let mut changed = false;
+    for (i, g) in gains.iter_mut().enumerate() {
+        let x = x_of(i as f32);
+        let col = Rect::from_min_max(pos2(x - col_w / 2.0, top - 8.0), pos2(x + col_w / 2.0, bottom + 8.0));
+        let mut resp = ui.interact(col, ui.scope_id().with(("eq-band", i)), Sense::click_and_drag());
+        let name = NAMES[i];
+        let old = *g;
+        if resp.double_clicked() {
+            *g = 0.0;
+        } else if let Some(pos) = resp.interact_pointer_pos()
+            && (resp.dragged() || resp.clicked())
+        {
+            *g = (((mid - pos.y) / ((bottom - top) / 2.0) * MAX_DB * 2.0).round() / 2.0).clamp(-MAX_DB, MAX_DB);
+        }
+        if *g != old {
+            changed = true;
+            resp.mark_changed();
+        }
+        let value = *g;
+        resp.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), value as f64, name));
+        let resp = resp.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+        let h = theme::anim_bool(ui.ctx(), resp.id.with("h"), resp.hovered() || resp.dragged() || resp.has_focus(), 0.12);
+        let track = Rect::from_center_size(pos2(x, mid), vec2(4.0, bottom - top));
+        p.rect_filled(track, 2.0, theme::glass(0.15 * fade));
+        let knob = pos2(x, y_of(value));
+        p.rect_filled(Rect::from_two_pos(pos2(x - 2.0, mid), pos2(x + 2.0, knob.y)), 2.0, theme::with_alpha(accent, fade));
+        p.circle_filled(knob + vec2(0.0, 1.0), 7.0 + h, theme::shade(0.25 * fade));
+        p.circle_filled(knob, 7.0 + h, theme::with_alpha(Color32::WHITE, fade));
+        if h > 0.0 {
+            let text = match value {
+                0.0 => "0 dB".to_owned(),
+                v if v > 0.0 => format!("+{v} dB"),
+                v => format!("\u{2212}{} dB", -v),
+            };
+            p.text(pos2(x, rect.top() + 9.0), Align2::CENTER_CENTER, text, theme::semibold(12.0), theme::with_alpha(theme::text(), h * fade));
+        }
+        p.text(pos2(x, rect.bottom() - 12.0), Align2::CENTER_CENTER, LABELS[i], theme::regular(12.0), theme::with_alpha(theme::text_dim(), fade));
+    }
+    changed
 }
 
 /// The hi-res source list: one line per addon, and "+ Add a source" below it that
@@ -2533,6 +2839,15 @@ fn settings_appearance(app: &mut App, ui: &mut Ui) {
             toggle(ui, &mut app.anim_bg, "Animated background");
         });
         divider(ui);
+        setting_row(
+            ui,
+            "Liquid Glass (rust-glass)",
+            Some("GPU-rendered refraction, backdrop blur and specular rim lighting on floating bars (inspired by MasterKPG/rust-glass). Turn off to save GPU power."),
+            |ui| {
+                toggle(ui, &mut app.liquid_glass, "Liquid Glass");
+            },
+        );
+        divider(ui);
         setting_row(ui, "Pulse with the music", Some("The background swells with the beat."), |ui| {
             toggle(ui, &mut app.reactive_bg, "Pulse with the music");
         });
@@ -2650,6 +2965,7 @@ fn settings_shortcuts(ui: &mut Ui) {
     settings_card(ui, |ui| {
         let keys: &[(&str, &[&str])] = &[
             ("Play / pause", &["Space"]),
+            ("Seek 5 s back / forward", &["← / →"]),
             ("Next / previous song", &["Ctrl", "→ / ←"]),
             ("Volume up / down", &["Ctrl", "↑ / ↓"]),
             ("Search", &["Ctrl", "F"]),
